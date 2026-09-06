@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
+from .config import settings
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -30,6 +32,10 @@ class JarvisState:
         self.social_drive = 0.10
         self.boredom = 0.00
         self.event_count = 0
+        self.recent_events: list[str] = []
+        self.last_cognition_action: str | None = None
+        self.last_cognition_reason: str | None = None
+        self.last_cognition_at: datetime | None = None
         self._lock = asyncio.Lock()
 
     async def register(self, connection: InterfaceConnection) -> None:
@@ -39,6 +45,11 @@ class JarvisState:
     async def unregister(self, interface_id: str) -> None:
         async with self._lock:
             self.interfaces.pop(interface_id, None)
+
+    def remember_event(self, event: str) -> None:
+        self.recent_events.append(event)
+        if len(self.recent_events) > 20:
+            del self.recent_events[:-20]
 
     async def snapshot(self) -> dict:
         async with self._lock:
@@ -59,6 +70,13 @@ class JarvisState:
                 "social_drive": round(self.social_drive, 3),
                 "boredom": round(self.boredom, 3),
                 "event_count": self.event_count,
+                "recent_events": self.recent_events[-8:],
+                "cognition": {
+                    "enabled": bool(settings.openai_api_key),
+                    "last_action": self.last_cognition_action,
+                    "last_reason": self.last_cognition_reason,
+                    "last_at": self.last_cognition_at.isoformat() if self.last_cognition_at else None,
+                },
             }
 
 

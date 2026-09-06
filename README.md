@@ -1,27 +1,100 @@
-# Jarvis Core — Proof of Concept
+# Jarvis Core — Cognition POC
 
-This is the smallest useful implementation of the project architecture:
+Core is Jarvis. Devices are interfaces/body services. Interpretation belongs in Core by default; interfaces handle hardware-local, latency-sensitive, and safety-critical work.
 
-> **Core is Jarvis. Devices are interfaces/body services.**
->
-> Interpretation belongs in Core by default. Edge/interface code handles hardware-local, latency-sensitive, and safety-critical work.
+This iteration proves an additional architectural seam: **the executive decides when cognition is warranted; the LLM does not run the heartbeat or directly control interfaces.** Cognition returns one validated decision: `SPEAK` or `DO_NOTHING`.
 
-The POC intentionally has no LLM, database, camera, microphone, or PiCar code yet. It proves four things first:
+## Railway-first deployment
 
-1. Jarvis Core is a persistent process independent of any interface.
-2. Interfaces connect outbound to Core over an authenticated WebSocket.
-3. Interfaces advertise capabilities instead of Core knowing device brands/models.
-4. Core can independently originate an action (`speak`) based on state and an agency loop.
+Deploy this repository to the existing Railway service. Keep your existing interface token and add:
+
+```text
+OPENAI_API_KEY=<your OpenAI API key>
+JARVIS_OPENAI_MODEL=gpt-5.6-luna
+```
+
+`gpt-5.6-luna` is the default for this inexpensive POC. You can change the model with the Railway variable without editing code.
+
+If `OPENAI_API_KEY` is absent, Core deliberately falls back to the original deterministic greeting so the service remains testable rather than crashing.
+
+Existing optional variables remain:
+
+```text
+JARVIS_HEARTBEAT_SECONDS=2
+JARVIS_SOCIAL_TRIGGER_SECONDS=20
+```
+
+After Railway redeploys, open:
+
+```text
+https://YOUR-SERVICE.up.railway.app/state
+```
+
+The state now includes:
+
+```json
+"cognition": {
+  "enabled": true,
+  "last_action": null,
+  "last_reason": null,
+  "last_at": null
+}
+```
+
+Connect the existing desktop interface:
+
+```bash
+python3 clients/desktop_interface.py \
+  --url https://YOUR-SERVICE.up.railway.app \
+  --token YOUR_TOKEN
+```
+
+Then test:
+
+```text
+idle
+```
+
+Wait long enough to represent an absence, then:
+
+```text
+active
+```
+
+The executive will decide that the return warrants cognition. The model may choose to say something or may choose `DO_NOTHING`. Refresh `/state` to inspect the last action and the model's short reason.
+
+## Architecture in this POC
+
+```text
+Interface event
+     ↓
+Core state / drives
+     ↓
+Executive gate (deterministic)
+     ↓
+Is cognition warranted?
+     ↓ yes
+Cognition service / OpenAI
+     ↓
+validated SPEAK | DO_NOTHING
+     ↓
+Core capability dispatch
+     ↓
+Interface
+```
+
+The OpenAI call uses structured parsing into a Pydantic model. Arbitrary model-generated abilities are not accepted.
 
 ## Layout
 
 ```text
 jarvis-poc/
 ├── jarvis_core/
+│   ├── cognition.py   # bounded LLM cognition resource
+│   ├── executive.py   # state/drive gatekeeper + action dispatch
 │   ├── main.py        # FastAPI + WebSocket gateway
-│   ├── executive.py   # tiny deterministic agency loop
-│   ├── state.py       # temporary in-memory Jarvis state
-│   ├── models.py      # protocol messages
+│   ├── state.py       # temporary in-memory state + introspection
+│   ├── models.py      # interface protocol
 │   └── config.py
 ├── clients/
 │   └── desktop_interface.py
@@ -31,109 +104,14 @@ jarvis-poc/
 └── .env.example
 ```
 
-## Local test
+## Deliberately still missing
 
-Requires Python 3.11+.
+- PostgreSQL/persistent memory
+- rich event bus
+- actual TTS/audio
+- camera/vision perception
+- unique per-interface credentials
+- goals/task planning
+- PiCar body service
 
-```bash
-cd jarvis-poc
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn jarvis_core.main:app --reload
-```
-
-In a second terminal:
-
-```bash
-cd jarvis-poc
-source .venv/bin/activate
-python clients/desktop_interface.py
-```
-
-You should see a connection acknowledgement.
-
-### Test agency
-
-At the desktop client prompt:
-
-```text
-> idle
-```
-
-Wait several seconds, then:
-
-```text
-> active
-```
-
-Core sees a user return, raises the social drive, and—without a user request for speech—may send:
-
-```text
-JARVIS: There you are. I was beginning to wonder where you went.
-```
-
-This is deliberately deterministic. The next step is to put cognition behind the same executive seam rather than letting an LLM become the executive loop.
-
-You can inspect Core state at:
-
-```text
-http://127.0.0.1:8000/state
-```
-
-Run tests:
-
-```bash
-pytest -q
-```
-
-## Railway deployment
-
-Railway can deploy this directly from a GitHub repository. `railway.json` supplies the start command and `/health` health check.
-
-Set this Railway variable to a long random secret:
-
-```text
-JARVIS_INTERFACE_TOKEN=<long-random-token>
-```
-
-Optionally:
-
-```text
-JARVIS_HEARTBEAT_SECONDS=2
-JARVIS_SOCIAL_TRIGGER_SECONDS=20
-```
-
-Generate a Railway public domain. Then connect the desktop interface with:
-
-```bash
-python clients/desktop_interface.py \
-  --url https://YOUR-SERVICE.up.railway.app \
-  --token YOUR_LONG_RANDOM_TOKEN
-```
-
-The client converts `https://` to `wss://` automatically.
-
-## What is intentionally temporary
-
-- **Authentication:** one shared token. Later: unique credential per interface.
-- **State:** in memory. Later: PostgreSQL-backed persistent state/memory.
-- **Event bus:** direct function calls. Later: internal bus abstraction, then queue only if scaling requires it.
-- **Agency:** deterministic drive threshold. Later: attention + goals + selective LLM cognition.
-- **Speaker:** text printed by the desktop client. Later: TTS audio playback capability.
-- **Presence:** manually generated. Later: desktop activity, microphone/VAD, camera/perception, etc.
-
-## Protocol principle
-
-Core sends semantic abilities:
-
-```json
-{
-  "type": "command",
-  "ability": "speak",
-  "data": {"text": "There you are."}
-}
-```
-
-Future PiCar Core commands should look like `go_to`, `look_at`, `follow`, etc.—not raw PWM or motor commands.
+Those should be added only after this cognition seam behaves sensibly.

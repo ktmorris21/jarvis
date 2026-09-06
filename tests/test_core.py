@@ -61,3 +61,14 @@ def test_core_can_originate_speak_command():
             assert msg["type"] == "command"
             assert msg["ability"] == "speak"
             assert "There you are" in msg["data"]["text"]
+
+
+def test_cognition_decision_schema_accepts_only_bounded_actions():
+    import pytest
+    from pydantic import ValidationError
+    from jarvis_core.cognition import CognitionDecision
+
+    assert CognitionDecision(action="SPEAK", speech="Hello.", reason="Test").action == "SPEAK"
+    assert CognitionDecision(action="DO_NOTHING", speech=None, reason="Test").action == "DO_NOTHING"
+    with pytest.raises(ValidationError):
+        CognitionDecision(action="DRIVE_AWAY", speech=None, reason="Nope")

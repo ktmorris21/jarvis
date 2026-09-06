@@ -4,3 +4,4 @@ websockets>=15,<17
 pydantic-settings>=2.10,<3
 pytest>=8,<10
 httpx>=0.28,<1
+openai>=1.100,<3

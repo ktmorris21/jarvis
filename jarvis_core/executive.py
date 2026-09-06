@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
+from .cognition import cognition
 from .config import settings
 from .models import Command, InterfaceEvent
 from .state import state
@@ -30,6 +31,7 @@ async def send_to_capability(capability: str, command: Command) -> bool:
 async def handle_event(event: InterfaceEvent) -> None:
     now = utc_now()
     state.event_count += 1
+    state.remember_event(event.event)
 
     if event.event == "USER_ACTIVE":
         was_present = state.user_present
@@ -50,12 +52,46 @@ async def handle_event(event: InterfaceEvent) -> None:
         state.boredom = max(0.0, state.boredom - 0.25)
 
 
+async def consider_return_interaction() -> None:
+    now = utc_now()
+    since_interaction = (
+        (now - state.last_interaction).total_seconds()
+        if state.last_interaction is not None
+        else None
+    )
+
+    decision = await cognition.consider_user_return(
+        social_drive=state.social_drive,
+        boredom=state.boredom,
+        seconds_since_last_interaction=since_interaction,
+        recent_events=list(state.recent_events),
+    )
+    state.last_cognition_action = decision.action
+    state.last_cognition_reason = decision.reason
+    state.last_cognition_at = utc_now()
+
+    if decision.action != "SPEAK" or not decision.speech:
+        # Thinking itself slightly satisfies the trigger so we don't ask the model
+        # the same question every heartbeat.
+        state.social_drive = max(0.0, state.social_drive - 0.10)
+        state.last_interaction = utc_now()
+        return
+
+    sent = await send_to_capability(
+        "speaker",
+        Command(ability="speak", data={"text": decision.speech}),
+    )
+    if sent:
+        state.last_interaction = utc_now()
+        state.social_drive = 0.12
+        state.boredom = max(0.0, state.boredom - 0.30)
+
+
 async def executive_loop() -> None:
-    """Tiny deterministic agency loop for architectural validation."""
+    """Agency loop. Deterministic logic decides WHEN cognition is warranted."""
     while True:
         await asyncio.sleep(settings.heartbeat_seconds)
 
-        # Artificial drives slowly rise with time.
         state.boredom = min(1.0, state.boredom + 0.02)
         state.social_drive = min(1.0, state.social_drive + 0.01)
 
@@ -68,20 +104,10 @@ async def executive_loop() -> None:
             and (utc_now() - state.last_interaction).total_seconds() < settings.social_trigger_seconds
         )
 
-        # POC agency: after a return, Jarvis can independently decide to speak.
+        # Executive gate: the model is not the heartbeat or scheduler.
         if (
             seconds_since_activity < settings.heartbeat_seconds * 2.5
             and state.social_drive >= 0.40
             and not recently_interacted
         ):
-            sent = await send_to_capability(
-                "speaker",
-                Command(
-                    ability="speak",
-                    data={"text": "There you are. I was beginning to wonder where you went."},
-                ),
-            )
-            if sent:
-                state.last_interaction = utc_now()
-                state.social_drive = 0.12
-                state.boredom = max(0.0, state.boredom - 0.30)
+            await consider_return_interaction()
