@@ -1,12 +1,12 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect, WebSocketException, status
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, WebSocketException, status
 from pydantic import ValidationError
 
 from .config import settings
-from .executive import executive_loop, handle_event
-from .models import InterfaceEvent, InterfaceHello
+from .executive import executive_loop, handle_event, send_command
+from .models import Command, DebugCommandRequest, InterfaceEvent, InterfaceHello
 from .state import InterfaceConnection, state
 
 
@@ -32,6 +32,31 @@ async def health():
 @app.get("/state")
 async def get_state():
     return await state.snapshot()
+
+
+@app.post("/debug/command")
+async def debug_command(
+    request: DebugCommandRequest,
+    x_jarvis_token: str = Header(default=""),
+):
+    """POC-only manual capability exerciser. Delete when no longer useful."""
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    command = Command(
+        target=request.target,
+        ability=request.ability,
+        data=request.data,
+    )
+    sent, route = await send_command(command)
+    if not sent:
+        raise HTTPException(status_code=409, detail=route)
+    return {
+        "status": "sent",
+        "command_id": command.command_id,
+        "target": route,
+        "ability": command.ability,
+    }
 
 
 @app.websocket("/ws")

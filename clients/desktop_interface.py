@@ -13,7 +13,7 @@ def now_iso() -> str:
 async def receiver(ws):
     async for raw in ws:
         msg = json.loads(raw)
-        if msg.get("type") == "command" and msg.get("ability") == "speak":
+        if msg.get("type") == "command" and msg.get("ability") == "speaker":
             print(f"\nJARVIS: {msg['data'].get('text', '')}\n> ", end="", flush=True)
         else:
             print(f"\n[CORE] {msg}\n> ", end="", flush=True)
@@ -30,10 +30,8 @@ async def send_event(ws, event: str, data: dict | None = None):
 
 async def interactive(ws):
     print("Commands: active | idle | say <text> | help | quit")
-    print("Try: idle, wait a bit, then active. Core may independently greet you.")
     while True:
-        cmd = await asyncio.to_thread(input, "> ")
-        cmd = cmd.strip()
+        cmd = (await asyncio.to_thread(input, "> ")).strip()
         if not cmd:
             continue
         if cmd == "quit":
@@ -45,8 +43,7 @@ async def interactive(ws):
         elif cmd == "idle":
             await send_event(ws, "USER_IDLE")
         elif cmd.startswith("say "):
-            text = cmd[4:].strip()
-            await send_event(ws, "USER_SPOKE", {"text": text})
+            await send_event(ws, "USER_SPOKE", {"text": cmd[4:].strip()})
         else:
             print("Unknown command. Type help.")
 
@@ -62,8 +59,7 @@ async def main(args):
             "interface_type": "desktop",
             "capabilities": ["speaker", "keyboard_activity"],
         }))
-        ack = json.loads(await ws.recv())
-        print(f"Connected: {ack}")
+        print(f"Connected: {json.loads(await ws.recv())}")
         recv_task = asyncio.create_task(receiver(ws))
         try:
             await interactive(ws)

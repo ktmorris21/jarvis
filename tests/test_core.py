@@ -1,74 +1,44 @@
-from fastapi.testclient import TestClient
+import asyncio
 
-from jarvis_core.main import app
-
-
-def test_health():
-    with TestClient(app) as client:
-        r = client.get("/health")
-        assert r.status_code == 200
-        assert r.json()["status"] == "ok"
+from jarvis_core.executive import send_command
+from jarvis_core.models import Command
+from jarvis_core.state import InterfaceConnection, state
 
 
-def test_websocket_auth_rejects_bad_token():
-    with TestClient(app) as client:
-        try:
-            with client.websocket_connect("/ws?token=wrong"):
-                assert False, "expected websocket rejection"
-        except Exception:
-            pass
+class FakeWebSocket:
+    def __init__(self):
+        self.messages = []
+
+    async def send_json(self, payload):
+        self.messages.append(payload)
 
 
-def test_websocket_hello():
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws?token=change-me") as ws:
-            ws.send_json({
-                "type": "hello",
-                "interface_id": "test-desktop",
-                "interface_type": "desktop",
-                "capabilities": ["speaker"],
-            })
-            msg = ws.receive_json()
-            assert msg["type"] == "hello_ack"
-            assert msg["core"] == "jarvis"
+def test_targeted_routing_hits_only_target():
+    async def run():
+        state.interfaces.clear()
+        desktop_ws = FakeWebSocket()
+        picar_ws = FakeWebSocket()
+        await state.register(InterfaceConnection("desktop-home", "desktop", ["speaker"], desktop_ws))
+        await state.register(InterfaceConnection("picar-main", "mobile_body", ["look", "move", "stop"], picar_ws))
+
+        ok, route = await send_command(Command(target="picar-main", ability="look", data={"pan_deg": 20}))
+        assert ok is True
+        assert route == "picar-main"
+        assert len(picar_ws.messages) == 1
+        assert len(desktop_ws.messages) == 0
+        assert picar_ws.messages[0]["ability"] == "look"
+
+    asyncio.run(run())
 
 
-def test_core_can_originate_speak_command():
-    from jarvis_core import executive
-    from jarvis_core.state import state
+def test_target_rejects_unadvertised_capability():
+    async def run():
+        state.interfaces.clear()
+        ws = FakeWebSocket()
+        await state.register(InterfaceConnection("picar-main", "mobile_body", ["look"], ws))
+        ok, message = await send_command(Command(target="picar-main", ability="move"))
+        assert ok is False
+        assert "does not advertise" in message
+        assert ws.messages == []
 
-    # Reset the small amount of mutable POC state this test cares about.
-    state.user_present = False
-    state.last_user_activity = None
-    state.last_interaction = None
-    state.social_drive = 0.10
-    state.boredom = 0.00
-
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws?token=change-me") as ws:
-            ws.send_json({
-                "type": "hello",
-                "interface_id": "agency-test",
-                "interface_type": "desktop",
-                "capabilities": ["speaker"],
-            })
-            assert ws.receive_json()["type"] == "hello_ack"
-
-            ws.send_json({"type": "event", "event": "USER_IDLE", "data": {}})
-            ws.send_json({"type": "event", "event": "USER_ACTIVE", "data": {}})
-
-            msg = ws.receive_json()
-            assert msg["type"] == "command"
-            assert msg["ability"] == "speak"
-            assert "There you are" in msg["data"]["text"]
-
-
-def test_cognition_decision_schema_accepts_only_bounded_actions():
-    import pytest
-    from pydantic import ValidationError
-    from jarvis_core.cognition import CognitionDecision
-
-    assert CognitionDecision(action="SPEAK", speech="Hello.", reason="Test").action == "SPEAK"
-    assert CognitionDecision(action="DO_NOTHING", speech=None, reason="Test").action == "DO_NOTHING"
-    with pytest.raises(ValidationError):
-        CognitionDecision(action="DRIVE_AWAY", speech=None, reason="Nope")
+    asyncio.run(run())

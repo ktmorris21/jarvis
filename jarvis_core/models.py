@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +25,14 @@ class InterfaceHello(BaseModel):
 
 class Command(BaseModel):
     type: str = "command"
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
     ability: str
+    target: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=utc_now)
+
+
+class DebugCommandRequest(BaseModel):
+    target: str
+    ability: str
+    data: dict[str, Any] = Field(default_factory=dict)

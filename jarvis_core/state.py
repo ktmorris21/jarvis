@@ -21,7 +21,7 @@ class InterfaceConnection:
 
 
 class JarvisState:
-    """POC state only. This becomes repository-backed state later."""
+    """POC state only. Persistent memory will later move to PostgreSQL."""
 
     def __init__(self) -> None:
         self.started_at = utc_now()
@@ -36,6 +36,7 @@ class JarvisState:
         self.last_cognition_action: str | None = None
         self.last_cognition_reason: str | None = None
         self.last_cognition_at: datetime | None = None
+        self.last_command_result: dict | None = None
         self._lock = asyncio.Lock()
 
     async def register(self, connection: InterfaceConnection) -> None:
@@ -71,6 +72,7 @@ class JarvisState:
                 "boredom": round(self.boredom, 3),
                 "event_count": self.event_count,
                 "recent_events": self.recent_events[-8:],
+                "last_command_result": self.last_command_result,
                 "cognition": {
                     "enabled": bool(settings.openai_api_key),
                     "last_action": self.last_cognition_action,

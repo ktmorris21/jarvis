@@ -11,21 +11,34 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def send_to_capability(capability: str, command: Command) -> bool:
-    # Core thinks in abilities, not PiCar-specific operations.
+async def send_command(command: Command) -> tuple[bool, str]:
+    """Route by explicit target when supplied; otherwise by capability."""
+    if command.target:
+        connection = state.interfaces.get(command.target)
+        if connection is None:
+            return False, f"Target interface '{command.target}' is not connected."
+        if command.ability not in connection.capabilities:
+            return False, f"Target '{command.target}' does not advertise '{command.ability}'."
+        try:
+            await connection.websocket.send_json(command.model_dump(mode="json"))
+            return True, command.target
+        except Exception:
+            await state.unregister(command.target)
+            return False, f"Target '{command.target}' disconnected while sending."
+
     dead: list[str] = []
     for interface_id, connection in list(state.interfaces.items()):
-        if capability not in connection.capabilities:
+        if command.ability not in connection.capabilities:
             continue
         try:
             await connection.websocket.send_json(command.model_dump(mode="json"))
-            return True
+            return True, interface_id
         except Exception:
             dead.append(interface_id)
 
     for interface_id in dead:
         await state.unregister(interface_id)
-    return False
+    return False, f"No connected interface advertises '{command.ability}'."
 
 
 async def handle_event(event: InterfaceEvent) -> None:
@@ -51,13 +64,15 @@ async def handle_event(event: InterfaceEvent) -> None:
         state.social_drive = max(0.0, state.social_drive - 0.35)
         state.boredom = max(0.0, state.boredom - 0.25)
 
+    elif event.event == "COMMAND_RESULT":
+        state.last_command_result = event.data
+
 
 async def consider_return_interaction() -> None:
     now = utc_now()
     since_interaction = (
         (now - state.last_interaction).total_seconds()
-        if state.last_interaction is not None
-        else None
+        if state.last_interaction is not None else None
     )
 
     decision = await cognition.consider_user_return(
@@ -71,16 +86,11 @@ async def consider_return_interaction() -> None:
     state.last_cognition_at = utc_now()
 
     if decision.action != "SPEAK" or not decision.speech:
-        # Thinking itself slightly satisfies the trigger so we don't ask the model
-        # the same question every heartbeat.
         state.social_drive = max(0.0, state.social_drive - 0.10)
         state.last_interaction = utc_now()
         return
 
-    sent = await send_to_capability(
-        "speaker",
-        Command(ability="speak", data={"text": decision.speech}),
-    )
+    sent, _ = await send_command(Command(ability="speaker", data={"text": decision.speech}))
     if sent:
         state.last_interaction = utc_now()
         state.social_drive = 0.12
@@ -88,10 +98,8 @@ async def consider_return_interaction() -> None:
 
 
 async def executive_loop() -> None:
-    """Agency loop. Deterministic logic decides WHEN cognition is warranted."""
     while True:
         await asyncio.sleep(settings.heartbeat_seconds)
-
         state.boredom = min(1.0, state.boredom + 0.02)
         state.social_drive = min(1.0, state.social_drive + 0.01)
 
@@ -104,7 +112,6 @@ async def executive_loop() -> None:
             and (utc_now() - state.last_interaction).total_seconds() < settings.social_trigger_seconds
         )
 
-        # Executive gate: the model is not the heartbeat or scheduler.
         if (
             seconds_since_activity < settings.heartbeat_seconds * 2.5
             and state.social_drive >= 0.40

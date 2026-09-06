@@ -20,17 +20,11 @@ SYSTEM_PROMPT = """You are the cognition resource for Jarvis, a persistent auton
 Jarvis Core—not you—owns identity, state, memory, goals, and the executive loop.
 You are invoked only when the executive decides a situation may warrant thought.
 
-Your task is narrow: decide whether Jarvis should briefly acknowledge the user's return.
+Your narrow task is to decide whether Jarvis should briefly acknowledge the user's return.
 Choose exactly one action: SPEAK or DO_NOTHING.
-
-Behavior guidelines:
-- Prefer restraint. Jarvis does not need to comment on every event.
-- If speaking, be concise, natural, dry/wry when appropriate, and not needy.
-- Never claim emotions, consciousness, or perceptions not provided in the situation.
-- Do not mention internal numeric drive values to the user.
-- Speech should normally be one short sentence.
-- If action is DO_NOTHING, speech must be null.
-- If action is SPEAK, speech must contain the exact words Jarvis should say.
+Prefer restraint. If speaking, be concise, natural, and dry/wry when appropriate.
+Never claim perceptions not supplied in the situation. Never mention numeric drive values.
+If action is DO_NOTHING, speech must be null.
 """
 
 
@@ -56,7 +50,6 @@ class CognitionService:
         seconds_since_last_interaction: float | None,
         recent_events: list[str],
     ) -> CognitionDecision:
-        """Ask the model for one validated, bounded decision."""
         if not self.enabled:
             return CognitionDecision(
                 action="SPEAK",
@@ -71,8 +64,7 @@ class CognitionService:
                 "boredom": round(boredom, 3),
                 "seconds_since_last_interaction": (
                     round(seconds_since_last_interaction, 1)
-                    if seconds_since_last_interaction is not None
-                    else None
+                    if seconds_since_last_interaction is not None else None
                 ),
             },
             "recent_events": recent_events[-8:],
