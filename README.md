@@ -123,4 +123,6 @@ Interfaces / Bodies
 - Memory storage exists, but memory formation/retrieval does not.
 - Perception remains minimal/manual.
 
+a
+
 These are deliberate boundaries for Phase 1 rather than forgotten pieces.
