@@ -8,10 +8,13 @@ from .config import settings
 from .executive import executive_loop, handle_event, send_command
 from .models import Command, DebugCommandRequest, InterfaceEvent, InterfaceHello
 from .state import InterfaceConnection, state
+from .persistence import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
+    state.restore()
     task = asyncio.create_task(executive_loop())
     yield
     task.cancel()
@@ -94,10 +97,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
             except ValidationError as exc:
                 await websocket.send_json({"type": "error", "detail": str(exc)})
                 continue
-            await handle_event(event)
+            await handle_event(event, source=interface_id or "unknown")
 
     except WebSocketDisconnect:
         pass
     finally:
         if interface_id:
             await state.unregister(interface_id)
+
+@app.get("/events")
+async def get_events(limit: int = 50):
+    from .persistence.repository import repository
+    return {"events": repository.recent_events(min(max(limit, 1), 200))}
+
+
+@app.get("/goals")
+async def get_goals(status_filter: str | None = None):
+    from .persistence.repository import repository
+    return {"goals": repository.goals(status_filter)}
+
+
+@app.get("/actions")
+async def get_actions(limit: int = 50):
+    from .persistence.repository import repository
+    return {"actions": repository.recent_actions(min(max(limit, 1), 200))}

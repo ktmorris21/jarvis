@@ -42,3 +42,21 @@ def test_target_rejects_unadvertised_capability():
         assert ws.messages == []
 
     asyncio.run(run())
+
+
+def test_event_and_world_state_persist():
+    from jarvis_core.executive import handle_event
+    from jarvis_core.models import InterfaceEvent
+    from jarvis_core.persistence import init_db
+    from jarvis_core.persistence.repository import repository
+
+    async def run():
+        init_db()
+        await handle_event(InterfaceEvent(event="USER_ACTIVE"), source="desktop-test")
+        events = repository.recent_events(10)
+        assert events[-1]["type"] == "USER_ACTIVE"
+        assert events[-1]["source"] == "desktop-test"
+        user_state = repository.get_state("person:user")
+        assert user_state["present"] is True
+
+    asyncio.run(run())

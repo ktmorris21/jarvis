@@ -1,143 +1,126 @@
-# Jarvis Core + PiCar-X Body POC
+# Jarvis Core v1 — Phase 1
 
-Core is Jarvis. The PiCar-X, desktop, phone, speaker, and future devices are interfaces/body services.
+Core is Jarvis. Cars, desktops, phones, speakers, and future devices are interfaces/body services. Interpretation defaults to Core; only hardware-local, latency-sensitive, or safety-critical work belongs at the edge.
 
-This iteration proves targeted capability routing from the Railway-hosted Core to a physical PiCar-X body over the public Internet.
+This phase moves the successful distributed POC onto a persistent Core architecture.
 
 ## What changed
 
-- Commands can target a specific connected interface (`picar-main`).
-- Core validates that the target actually advertises the requested ability.
-- PiCar body service advertises `look`, `move`, and `stop`.
-- SunFounder-specific calls are isolated in `body_services/picar/hardware.py`.
-- The body clamps speed, steering, pan/tilt, and movement duration locally.
-- Every `move` command must have a finite duration; max is 1000 ms in this POC.
-- Network loss calls `stop()` locally before reconnecting.
-- PiCar reports `COMMAND_RESULT` back to Core.
-- `/debug/command` provides a temporary authenticated way to exercise a body capability without involving cognition.
+Jarvis now separates four kinds of truth:
 
-## Deploy Core to Railway
+- **Events** — immutable facts about what happened.
+- **State** — what Jarvis currently believes is true.
+- **Goals** — outcomes Jarvis wants to achieve.
+- **Actions** — capability requests Jarvis attempted and their results.
 
-Update the existing GitHub repo with these files and let Railway redeploy. Existing variables remain valid:
+A `memories` table is also present as the seam for the next phase, but automatic memory formation/retrieval is intentionally not implemented yet.
+
+Live WebSocket connections remain in RAM. Durable interface identity/capabilities, events, world state, goals, actions, and memories live in PostgreSQL.
+
+## Railway deployment
+
+1. Push this version to the existing GitHub repository and allow Railway to redeploy.
+2. In the same Railway project, click **+ New → Database → PostgreSQL**.
+3. On the Jarvis Core service, create a variable reference named `DATABASE_URL` pointing to the PostgreSQL service's `DATABASE_URL`.
+4. Keep the existing variables:
 
 ```text
 JARVIS_INTERFACE_TOKEN=...
 OPENAI_API_KEY=...
 JARVIS_OPENAI_MODEL=gpt-5.6-luna
+JARVIS_HEARTBEAT_SECONDS=2
+JARVIS_SOCIAL_TRIGGER_SECONDS=20
 ```
 
-No additional Railway services or variables are needed.
+On startup Core creates the Phase-1 tables automatically. This is deliberate for rapid iteration; migrate to Alembic before schema evolution becomes substantial.
 
-Check:
+Railway exposes `DATABASE_URL` on its PostgreSQL service; Core normalizes Railway's `postgresql://` URL to SQLAlchemy's explicit psycopg 3 dialect.
+
+## Smoke test
+
+After deployment:
 
 ```text
-https://YOUR-SERVICE.up.railway.app/health
-https://YOUR-SERVICE.up.railway.app/state
+GET /health
+GET /state
+GET /events
+GET /actions
+GET /goals
 ```
 
-## Prepare the PiCar-X
+Connect the existing desktop client and PiCar body exactly as before. Their protocol has not changed.
 
-This assumes the SunFounder PiCar-X software is already installed and this succeeds on the Pi:
+Generate a few events (`idle`, `active`, PiCar commands), then inspect `/events` and `/actions`.
 
-```bash
-python3 -c "from picarx import Picarx; print('PiCar-X library OK')"
-```
+### Persistence test
 
-Install only the network dependency if necessary:
+1. With the desktop connected, send `active` or otherwise generate events.
+2. Confirm they appear at `/events`.
+3. Redeploy/restart the Railway Core service.
+4. Reopen `/state` and `/events`.
 
-```bash
-python3 -m pip install websockets
-```
+The WebSocket interfaces will reconnect, but historical events and persisted world state should remain.
 
-Copy this repository onto the Pi, then from the repo root run:
+## Data model
 
-```bash
-python3 -m body_services.picar.main \
-  --url https://YOUR-SERVICE.up.railway.app \
-  --token YOUR_TOKEN
-```
-
-Expected output:
+Tables created in Phase 1:
 
 ```text
-Connected to Jarvis Core: {'type': 'hello_ack', 'interface_id': 'picar-main', 'core': 'jarvis'}
+interfaces
+  durable identity + advertised capabilities + last seen
+
+events
+  immutable event history
+
+entity_states
+  current world/working state by entity
+
+goals
+  desired outcomes and status
+
+actions
+  commands sent to capabilities + results
+
+memories
+  persistent memory seam for Phase 2
 ```
 
-Open `/state`; `picar-main` should appear as a `mobile_body` with `look`, `move`, and `stop` capabilities.
+The current `person:user` entity is intentionally generic. Identity/entity resolution comes later with perception and semantic memory.
 
-## First physical test: camera head only
-
-Use curl from any machine. Replace URL/token as needed:
-
-```bash
-curl -X POST 'https://YOUR-SERVICE.up.railway.app/debug/command' \
-  -H 'Content-Type: application/json' \
-  -H 'X-Jarvis-Token: YOUR_TOKEN' \
-  -d '{"target":"picar-main","ability":"look","data":{"pan_deg":25,"tilt_deg":0}}'
-```
-
-Then center it:
-
-```bash
-curl -X POST 'https://YOUR-SERVICE.up.railway.app/debug/command' \
-  -H 'Content-Type: application/json' \
-  -H 'X-Jarvis-Token: YOUR_TOKEN' \
-  -d '{"target":"picar-main","ability":"look","data":{"pan_deg":0,"tilt_deg":0}}'
-```
-
-## Second physical test: bounded motion
-
-Put the PiCar on the floor with clear space. This command requests 20% forward power for only 400 ms:
-
-```bash
-curl -X POST 'https://YOUR-SERVICE.up.railway.app/debug/command' \
-  -H 'Content-Type: application/json' \
-  -H 'X-Jarvis-Token: YOUR_TOKEN' \
-  -d '{"target":"picar-main","ability":"move","data":{"direction":"forward","speed":20,"duration_ms":400,"steering_deg":0}}'
-```
-
-The body will stop itself when the duration expires. In this POC it will also clamp any request to:
-
-- speed <= 35
-- duration <= 1000 ms
-- steering between -30 and +30 degrees
-- pan/tilt between -35 and +35 degrees
-
-You can explicitly issue stop:
-
-```bash
-curl -X POST 'https://YOUR-SERVICE.up.railway.app/debug/command' \
-  -H 'Content-Type: application/json' \
-  -H 'X-Jarvis-Token: YOUR_TOKEN' \
-  -d '{"target":"picar-main","ability":"stop","data":{}}'
-```
-
-## Mock mode
-
-To prove the Pi networking path without touching motors/servos:
-
-```bash
-python3 -m body_services.picar.main \
-  --url https://YOUR-SERVICE.up.railway.app \
-  --token YOUR_TOKEN \
-  --mock
-```
-
-## Architecture demonstrated
+## Architecture
 
 ```text
-Railway Jarvis Core
-      |
-      | authenticated WSS
-      v
-PiCar body service
-      |
-      | validated semantic ability
-      v
-SunFounder hardware wrapper
-      |
-      v
-motors / camera servos
+Interfaces / Bodies
+        │
+        ▼
+   Event Intake ─────────────► events (Postgres)
+        │
+        ▼
+   World State ──────────────► entity_states (Postgres)
+        │
+        ▼
+    Executive
+      │    │
+ routine  cognition
+      │    │
+      └────┤
+           ▼
+        Actions ─────────────► actions (Postgres)
+           │
+           ▼
+   Capability routing
+           │
+           ▼
+   Interfaces / Bodies
 ```
 
-Core never calls `Picarx.forward()` or a servo API. It knows only that `picar-main` provides abilities such as `move` and `look`.
+## Intentional limitations
+
+- `create_all()` bootstraps schema instead of Alembic migrations.
+- Repository calls are synchronous; this is acceptable at present load and can be made async later without changing the domain model.
+- Drives are still POC-quality.
+- Goal execution/planning is not implemented yet.
+- Memory storage exists, but memory formation/retrieval does not.
+- Perception remains minimal/manual.
+
+These are deliberate boundaries for Phase 1 rather than forgotten pieces.
