@@ -44,6 +44,14 @@ class AttentionService:
         if event_type == "COMMAND_RESULT" and data.get("status") == "failed":
             return AttentionDecision(0.85,Disposition.EXECUTIVE,["command failure"])
 
+        if event_type == "VISUAL_OBSERVATION":
+            hint = str(data.get("attention_hint", "routine"))
+            if hint == "important":
+                return AttentionDecision(score=0.9, disposition=Disposition.IMMEDIATE, reasons=["vision marked important"])
+            if hint == "interesting" or data.get("people_visible"):
+                return AttentionDecision(score=0.65, disposition=Disposition.EXECUTIVE, reasons=["visual observation may merit attention"])
+            return AttentionDecision(score=0.25, disposition=Disposition.PERSIST_ONLY, reasons=["routine visual observation"])
+
         if event_type == "USER_SPOKE":
             return AttentionDecision(0.90,Disposition.EXECUTIVE,["direct user communication"])
         if event_type == "USER_ACTIVE":

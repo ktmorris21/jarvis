@@ -9,6 +9,7 @@ import websockets
 from .abilities import PiCarAbilities
 from .audio_io import AudioIO
 from .hardware import PiCarHardware
+from .camera_io import CameraIO
 from .vad import EnergyVad, VadConfig
 
 
@@ -39,8 +40,34 @@ async def manual_listen(args, audio_io):
     await upload_wav(args, wav)
 
 
-async def console_loop(args, audio_io):
-    print("Commands: listen | quit")
+
+async def upload_frame(args, jpeg: bytes):
+    async with httpx.AsyncClient(timeout=90) as client:
+        r = await client.post(
+            args.url.rstrip("/") + "/vision/frame",
+            content=jpeg,
+            headers={
+                "Content-Type": "image/jpeg",
+                "X-Jarvis-Token": args.token,
+                "X-Jarvis-Interface": args.interface_id,
+            },
+        )
+        r.raise_for_status()
+        payload = r.json()
+        obs = payload.get("observation") or {}
+        print("Jarvis sees:", obs.get("summary") or "(no summary)")
+        if obs.get("notable"):
+            print("Notable:", "; ".join(obs["notable"]))
+
+
+async def capture_and_observe(args, camera_io):
+    print("Capturing camera frame...")
+    jpeg = await camera_io.capture_jpeg()
+    print(f"Sending {len(jpeg)} bytes to Jarvis Core...")
+    await upload_frame(args, jpeg)
+
+async def console_loop(args, audio_io, camera_io):
+    print("Commands: listen | see | quit")
     while True:
         command = (await asyncio.to_thread(input, "> ")).strip().lower()
         if command == "listen":
@@ -48,6 +75,11 @@ async def console_loop(args, audio_io):
                 await manual_listen(args, audio_io)
             except Exception as e:
                 print("Audio capture/upload failed:", e)
+        elif command == "see":
+            try:
+                await capture_and_observe(args, camera_io)
+            except Exception as e:
+                print("Camera capture/vision failed:", e)
         elif command == "quit":
             return
 
@@ -83,6 +115,19 @@ async def vad_loop(args):
     finally:
         await vad.close()
 
+
+
+async def vision_console_loop(args, camera_io):
+    print("Camera test command: type 'see' and press Enter.")
+    while True:
+        command = (await asyncio.to_thread(input, "> ")).strip().lower()
+        if command == "see":
+            try:
+                await capture_and_observe(args, camera_io)
+            except Exception as e:
+                print("Camera capture/vision failed:", e)
+        elif command == "quit":
+            return
 
 async def websocket_loop(args, hw, abilities):
     while True:
@@ -144,12 +189,14 @@ async def run(args):
     hw = PiCarHardware(args.mock)
     audio_io = AudioIO(args.audio_input, args.audio_output, args.record_seconds)
     abilities = PiCarAbilities(hw, audio_io)
+    camera_io = CameraIO(args.camera_width, args.camera_height)
 
     tasks = [websocket_loop(args, hw, abilities)]
     if args.vad:
         tasks.append(vad_loop(args))
+        tasks.append(vision_console_loop(args, camera_io))
     else:
-        tasks.append(console_loop(args, audio_io))
+        tasks.append(console_loop(args, audio_io, camera_io))
 
     await asyncio.gather(*tasks)
 
@@ -164,6 +211,8 @@ if __name__ == "__main__":
     p.add_argument("--audio-input", default="plughw:2,0")
     p.add_argument("--audio-output", default="plughw:2,0")
     p.add_argument("--record-seconds", type=int, default=5)
+    p.add_argument("--camera-width", type=int, default=640)
+    p.add_argument("--camera-height", type=int, default=480)
 
     p.add_argument("--vad", action="store_true")
     p.add_argument("--vad-end-silence-ms", type=int, default=750)

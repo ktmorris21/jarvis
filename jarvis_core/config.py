@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     social_trigger_seconds: float = 20.0
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
+    vision_model: str = "gpt-5.6-luna"
     database_url: str = "sqlite:///./jarvis.db"
     stt_model: str = "gpt-4o-mini-transcribe"
     tts_model: str = "gpt-4o-mini-tts"

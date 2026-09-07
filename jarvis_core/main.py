@@ -89,6 +89,43 @@ async def audio_utterance(
     await handle_event(event, source=x_jarvis_interface)
     return {"status": "accepted", "text": text}
 
+
+@app.post("/vision/frame")
+async def vision_frame(
+    request: Request,
+    x_jarvis_token: str = Header(default=""),
+    x_jarvis_interface: str = Header(default="picar-main"),
+):
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    jpeg_bytes = await request.body()
+    if not jpeg_bytes or len(jpeg_bytes) > 8_000_000:
+        raise HTTPException(status_code=400, detail="Expected JPEG body between 1 byte and 8 MB")
+
+    from .vision import vision
+    try:
+        obs = await vision.observe_jpeg(jpeg_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Vision failed: {type(exc).__name__}")
+
+    observation_data = obs.model_dump()
+    state.last_visual_observation = observation_data
+
+    event = InterfaceEvent(
+        event="VISUAL_OBSERVATION",
+        data={
+            **observation_data,
+            "input_mode": "camera_still",
+        },
+    )
+    await handle_event(event, source=x_jarvis_interface)
+
+    return {
+        "status": "observed",
+        "observation": observation_data,
+    }
+
 @app.websocket("/ws")
 async def ws_endpoint(ws:WebSocket,token:str=Query(default="")):
     if token!=settings.interface_token: raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
