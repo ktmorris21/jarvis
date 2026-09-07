@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
     database_url: str = "sqlite:///./jarvis.db"
+    stt_model: str = "gpt-4o-mini-transcribe"
+    tts_model: str = "gpt-4o-mini-tts"
+    tts_voice: str = "alloy"
     model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=".env", extra="ignore")
 
 settings = Settings()

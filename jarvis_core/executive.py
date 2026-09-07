@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime,timezone
 from .attention import attention,Disposition
+from .audio import audio
 from .cognition import cognition
 from .config import settings
 from .memory import memory
@@ -65,7 +66,33 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
     if decision.disposition in {Disposition.EXECUTIVE,Disposition.IMMEDIATE}:
         if event.event=="USER_ACTIVE":
             await consider_return_interaction()
+        elif event.event=="USER_SPOKE" and event.data.get("text"):
+            await respond_to_user_speech(event.data["text"], source)
     return {"attention":state.last_attention,"persisted":True}
+
+
+async def respond_to_user_speech(text: str, source: str):
+    memories = memory.retrieve(text, limit=5)
+    state.last_retrieved_memory_ids = [m["id"] for m in memories]
+    reply = await cognition.respond_to_user(text=text, relevant_memories=memories)
+    if not reply:
+        return
+
+    connection = state.interfaces.get(source)
+    data = {"text": reply}
+    if connection and "audio_output" in connection.capabilities:
+        try:
+            data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
+        except Exception:
+            # Text remains usable even if TTS fails.
+            pass
+
+    # Prefer replying through the interface that heard the user.
+    target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
+    await send_command(Command(target=target, ability="speaker", data=data))
+    state.last_interaction = utc_now()
+    state.persist_runtime()
+
 
 async def consider_return_interaction():
     now=utc_now(); since=(now-state.last_interaction).total_seconds() if state.last_interaction else None

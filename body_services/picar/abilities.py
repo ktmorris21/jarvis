@@ -1,9 +1,15 @@
 import asyncio
 class AbilityError(ValueError):pass
 class PiCarAbilities:
-    def __init__(self,hardware): self.hardware=hardware; self._lock=asyncio.Lock()
+    def __init__(self,hardware,audio_io=None): self.hardware=hardware; self.audio_io=audio_io; self._lock=asyncio.Lock()
     async def execute(self,ability,data):
         if ability=="stop": self.hardware.stop(); return {"stopped":True}
+        if ability=="speaker":
+            if not self.audio_io: raise AbilityError("audio output is not configured")
+            encoded=data.get("audio_wav_base64")
+            if not encoded: raise AbilityError("speaker command missing audio_wav_base64")
+            await self.audio_io.play_wav_base64(encoded)
+            return {"played":True,"text":data.get("text")}
         if ability=="look":
             p,t=self.hardware.look(data.get("pan_deg",0),data.get("tilt_deg",0)); return {"pan_deg":p,"tilt_deg":t}
         if ability=="move":

@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI,Header,HTTPException,Query,WebSocket,WebSocketDisconnect,WebSocketException,status
+from fastapi import FastAPI,Header,HTTPException,Query,Request,WebSocket,WebSocketDisconnect,WebSocketException,status
 from pydantic import ValidationError
 from .config import settings
 from .executive import executive_loop,handle_event,send_command
@@ -15,9 +15,9 @@ async def lifespan(app:FastAPI):
     try: await task
     except asyncio.CancelledError: pass
 
-app=FastAPI(title="Jarvis Core v1 Attention",lifespan=lifespan)
+app=FastAPI(title="Jarvis Core v1 Audio POC",lifespan=lifespan)
 @app.get("/health")
-async def health(): return {"status":"ok","service":"jarvis-core","phase":"v1-attention"}
+async def health(): return {"status":"ok","service":"jarvis-core","phase":"v1-audio-poc"}
 @app.get("/state")
 async def get_state(): return await state.snapshot()
 @app.get("/events")
@@ -50,6 +50,29 @@ async def debug_command(req:DebugCommandRequest,x_jarvis_token:str=Header(defaul
     cmd=Command(target=req.target,ability=req.ability,data=req.data); sent,route=await send_command(cmd)
     if not sent: raise HTTPException(409,route)
     return {"status":"sent","command_id":cmd.command_id,"target":route,"ability":cmd.ability}
+
+@app.post("/audio/utterance")
+async def audio_utterance(
+    request: Request,
+    x_jarvis_token: str = Header(default=""),
+    x_jarvis_interface: str = Header(default="picar-main"),
+):
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    wav_bytes = await request.body()
+    if not wav_bytes or len(wav_bytes) > 5_000_000:
+        raise HTTPException(400, "Expected a WAV body between 1 byte and 5 MB")
+    from .audio import audio
+    try:
+        text = await audio.transcribe_wav(wav_bytes)
+    except Exception as e:
+        raise HTTPException(502, f"Transcription failed: {type(e).__name__}")
+    if not text:
+        return {"status": "no_speech", "text": ""}
+    event = InterfaceEvent(event="USER_SPOKE", data={"text": text, "input_mode": "audio"})
+    await handle_event(event, source=x_jarvis_interface)
+    return {"status": "accepted", "text": text}
+
 @app.websocket("/ws")
 async def ws_endpoint(ws:WebSocket,token:str=Query(default="")):
     if token!=settings.interface_token: raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)

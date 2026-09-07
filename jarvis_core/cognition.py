@@ -27,4 +27,31 @@ class CognitionService:
             return d
         except Exception as e:
             log.exception("cognition failed"); return CognitionDecision(action="DO_NOTHING",speech=None,reason=f"Cognition unavailable: {type(e).__name__}")
+    async def respond_to_user(self, *, text: str, relevant_memories=None) -> str:
+        if not self.enabled:
+            return "I heard you, but my cognition service is not configured."
+        memories = [
+            {"type": m.get("memory_type"), "content": m.get("content")}
+            for m in (relevant_memories or [])
+        ]
+        prompt = {
+            "user_said": text,
+            "relevant_memories": memories,
+        }
+        try:
+            r = await self._get_client().responses.create(
+                model=settings.openai_model,
+                instructions=(
+                    "You are Jarvis's bounded conversational cognition. Jarvis Core owns identity, "
+                    "memory, goals, attention, and action routing. Reply naturally and concisely to "
+                    "the user's utterance. Use relevant memories only when useful. Do not claim "
+                    "perceptions or actions that were not supplied."
+                ),
+                input=str(prompt),
+            )
+            return (r.output_text or "").strip() or "I heard you."
+        except Exception as e:
+            log.exception("conversation cognition failed")
+            return f"I heard you, but cognition is temporarily unavailable."
+
 cognition=CognitionService()
