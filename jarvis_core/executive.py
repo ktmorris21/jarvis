@@ -3,11 +3,14 @@ from datetime import datetime,timezone
 from .attention import attention,Disposition
 from .audio import audio
 from .cognition import cognition
+from .context_builder import context_builder
+from .context_side_effects import context_side_effects
 from .config import settings
 from .memory import memory
 from .models import Command,InterfaceEvent
 from .persistence.repository import repository
 from .state import state
+from .working_memory import working_memory
 
 def utc_now(): return datetime.now(timezone.utc)
 
@@ -80,11 +83,37 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
 
 
 async def respond_to_user_speech(text: str, source: str):
-    memories = memory.retrieve(text, limit=5)
-    state.last_retrieved_memory_ids = [m["id"] for m in memories]
-    reply = await cognition.respond_to_user(text=text, relevant_memories=memories)
+    # Verbatim short-term context is separate from durable memory.
+    working_memory.add_turn("user", text, source)
+
+    draft = context_builder.gather(text, source)
+    selection = await cognition.select_memories(draft)
+    packet = context_builder.finalize(draft, selection.selected_memory_ids, selection.reason)
+    state.last_retrieved_memory_ids = [m["id"] for m in packet.selected_memories]
+
+    turn = await cognition.respond_with_context(packet)
+    reply = (turn.speech or "").strip()
     if not reply:
         return
+
+    side_effects = context_side_effects.apply(turn, source)
+    if side_effects["accepted_memory_ids"]:
+        state.last_formed_memory_ids = side_effects["accepted_memory_ids"]
+
+    # The assistant turn enters working memory before output so the next user
+    # reference sees exactly what Jarvis just said.
+    working_memory.add_turn("assistant", reply, "jarvis:core")
+
+    state.last_context = {
+        "source": source,
+        "working_turns": packet.working_turns,
+        "active_goal_ids": [g["id"] for g in packet.active_goals],
+        "candidate_memory_ids": [m["id"] for m in draft.candidate_memories],
+        "selected_memory_ids": [m["id"] for m in packet.selected_memories],
+        "selection_reason": packet.selection_reason,
+        "side_effects": side_effects,
+    }
+    repository.upsert_state("context:last", "cognition_context", state.last_context)
 
     connection = state.interfaces.get(source)
     data = {"text": reply}
@@ -92,10 +121,8 @@ async def respond_to_user_speech(text: str, source: str):
         try:
             data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
         except Exception:
-            # Text remains usable even if TTS fails.
             pass
 
-    # Prefer replying through the interface that heard the user.
     target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
     await send_command(Command(target=target, ability="speaker", data=data))
     state.last_interaction = utc_now()

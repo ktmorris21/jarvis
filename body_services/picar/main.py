@@ -93,7 +93,7 @@ async def websocket_loop(args, hw, abilities):
                 .replace("http://", "ws://")
                 + f"/ws?token={args.token}"
             )
-            async with websockets.connect(u) as ws:
+            async with websockets.connect(u, max_size=4 * 1024 * 1024) as ws:
                 await ws.send(json.dumps({
                     "type": "hello",
                     "interface_id": args.interface_id,

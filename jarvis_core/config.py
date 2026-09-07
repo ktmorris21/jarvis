@@ -11,6 +11,15 @@ class Settings(BaseSettings):
     stt_model: str = "gpt-4o-mini-transcribe"
     tts_model: str = "gpt-4o-mini-tts"
     tts_voice: str = "alloy"
+    working_memory_turns: int = 16
+    working_memory_timeout_seconds: int = 600
+    working_memory_turn_char_limit: int = 2000
+    context_memory_candidates: int = 12
+    context_selected_memory_limit: int = 6
+    context_goal_limit: int = 8
+    context_world_state_limit: int = 12
+    context_memory_accept_confidence: float = 0.80
+    context_goal_accept_confidence: float = 0.90
     model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=".env", extra="ignore")
 
 settings = Settings()

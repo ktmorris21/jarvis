@@ -71,6 +71,14 @@ class Repository:
         with SessionLocal() as s:
             r=s.get(MemoryRow,memory_id)
             return None if r is None else {"id":r.id,"memory_type":r.memory_type,"content":r.content,"data":r.data or {},"salience":r.salience,"created_at":r.created_at.isoformat()}
+
+    def memory_exists_exact(self, content):
+        normalized=(content or "").strip().lower()
+        if not normalized: return False
+        with SessionLocal() as s:
+            rows=s.scalars(select(MemoryRow).order_by(desc(MemoryRow.created_at)).limit(500)).all()
+            return any((r.content or "").strip().lower()==normalized for r in rows)
+
     def note_memories_retrieved(self,ids):
         if not ids:return
         with SessionLocal() as s:
