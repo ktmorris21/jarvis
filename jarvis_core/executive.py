@@ -11,6 +11,14 @@ from .state import state
 
 def utc_now(): return datetime.now(timezone.utc)
 
+def record_self_action_event(command:Command,routed_target=None):
+    event_type="JARVIS_SPOKE" if command.ability=="speaker" else "JARVIS_ACTED"
+    data={"ability":command.ability,"target":routed_target or command.target,"command_id":command.command_id,"data":command.data}
+    source_event_id=repository.record_event(event_type=event_type,source="jarvis:core",occurred_at=utc_now(),data=data,importance=.8 if event_type=="JARVIS_SPOKE" else .5)
+    formed=memory.form_from_event(event_type=event_type,source="jarvis:core",data=data,source_event_id=source_event_id,context={})
+    if formed: state.last_formed_memory_ids=formed
+    return source_event_id
+
 async def send_command(command:Command):
     if command.target:
         c=state.interfaces.get(command.target)
@@ -18,13 +26,13 @@ async def send_command(command:Command):
             repository.record_action(ability=command.ability,target=command.target,command_id=command.command_id,data=command.data,status="not_sent"); return False,f"Target interface '{command.target}' is not connected."
         if command.ability not in c.capabilities: return False,f"Target '{command.target}' does not advertise '{command.ability}'."
         try:
-            await c.websocket.send_json(command.model_dump(mode="json")); repository.record_action(ability=command.ability,target=command.target,command_id=command.command_id,data=command.data,status="sent"); return True,command.target
+            await c.websocket.send_json(command.model_dump(mode="json")); repository.record_action(ability=command.ability,target=command.target,command_id=command.command_id,data=command.data,status="sent"); record_self_action_event(command,command.target); return True,command.target
         except Exception:
             await state.unregister(command.target); return False,f"Target '{command.target}' disconnected while sending."
     for iid,c in list(state.interfaces.items()):
         if command.ability not in c.capabilities: continue
         try:
-            await c.websocket.send_json(command.model_dump(mode="json")); repository.record_action(ability=command.ability,target=iid,command_id=command.command_id,data=command.data,status="sent"); return True,iid
+            await c.websocket.send_json(command.model_dump(mode="json")); repository.record_action(ability=command.ability,target=iid,command_id=command.command_id,data=command.data,status="sent"); record_self_action_event(command,iid); return True,iid
         except Exception: await state.unregister(iid)
     return False,f"No connected interface advertises '{command.ability}'."
 

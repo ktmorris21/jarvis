@@ -7,6 +7,29 @@ def _tokens(text):
     return {t for t in re.findall(r"[a-z0-9']+",text.lower()) if len(t)>2 and t not in stop}
 
 class MemoryService:
+
+    @staticmethod
+    def _is_self_defining_speech(text: str) -> bool:
+        """Conservative Phase-2 rule for autobiographical self-memory.
+
+        This intentionally catches explicit self-preference/identity choices and avoids
+        memorizing every routine spoken response.
+        """
+        lowered = text.lower()
+        patterns = [
+            r"\bmy favorite\b",
+            r"\bi choose\b",
+            r"\bi chose\b",
+            r"\bi prefer\b",
+            r"\bi like\b",
+            r"\bi dislike\b",
+            r"\bi want\b",
+            r"\bi(?:'m| am) going to call myself\b",
+            r"\bcall me\b",
+            r"\bmy name is\b",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
     def form_from_event(self, *,event_type,source,data,source_event_id,context=None):
         context=context or {}; created=[]
         if event_type=="USER_ACTIVE" and context.get("was_present") is False:
@@ -16,6 +39,11 @@ class MemoryService:
         elif event_type=="USER_SPOKE":
             text=str(data.get("text","")).strip()
             if text: created.append(repository.add_memory("episodic",f'User said: "{text[:1000]}"',{"source_event_id":source_event_id,"source":source,"tags":["user","speech","conversation",source]},0.65))
+        elif event_type=="JARVIS_SPOKE":
+            payload=data.get("data") or {}
+            text=str(payload.get("text","")).strip()
+            if text and self._is_self_defining_speech(text):
+                created.append(repository.add_memory("episodic",f'Jarvis said: "{text[:1000]}"',{"source_event_id":source_event_id,"source":source,"tags":["jarvis","self","speech","autobiographical"],"formation":"self_defining_action_rule","command_id":data.get("command_id"),"ability":data.get("ability")},0.8))
         elif event_type=="COMMAND_RESULT" and data.get("status")=="failed":
             ability=data.get("ability") or "unknown ability"
             created.append(repository.add_memory("episodic",f"A Jarvis body/interface command failed while attempting {ability}.",{"source_event_id":source_event_id,"source":source,"tags":["failure","command",str(ability),source],"result":data},0.75))
