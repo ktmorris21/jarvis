@@ -59,7 +59,9 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
     elif event.event=="USER_IDLE":
         memory_context["was_present"]=state.user_present; state.user_present=False
     elif event.event=="USER_SPOKE":
-        state.user_present=True; state.last_user_activity=utc_now(); state.last_interaction=utc_now(); state.social_drive=max(0,state.social_drive-.35); state.boredom=max(0,state.boredom-.25)
+        state.curiosity=max(0,state.curiosity-.15); state.user_present=True; state.last_user_activity=utc_now(); state.last_interaction=utc_now(); state.social_drive=max(0,state.social_drive-.35); state.boredom=max(0,state.boredom-.25)
+    elif event.event=="VISUAL_OBSERVATION":
+        state.curiosity=max(0,state.curiosity-.20)
     elif event.event=="COMMAND_RESULT":
         state.last_command_result=event.data; cid=event.data.get("command_id");
         if cid: repository.complete_action_by_command(cid,event.data)
@@ -141,6 +143,83 @@ async def consider_return_interaction():
         state.last_interaction=utc_now(); state.social_drive=max(0,state.social_drive-.1)
     state.persist_runtime()
 
+
+def _curiosity_body():
+    """Return any connected mobile body capable of curiosity actions."""
+    for iid, connection in state.interfaces.items():
+        if connection.interface_type != "mobile_body":
+            continue
+        if "look_around" in connection.capabilities or "move" in connection.capabilities:
+            return iid, connection
+    return None, None
+
+
+async def maybe_explore_from_curiosity():
+    """Initiate one tiny exploratory behavior when Jarvis is idle."""
+    now = utc_now()
+
+    if state.curiosity < settings.curiosity_trigger:
+        return False
+
+    # Goal-directed behavior outranks idle curiosity.
+    if repository.goals("active"):
+        return False
+
+    if state.last_curiosity_action_at is not None:
+        elapsed = (now - state.last_curiosity_action_at).total_seconds()
+        if elapsed < settings.curiosity_cooldown_seconds:
+            return False
+
+    interface_id, body = _curiosity_body()
+    if not body:
+        return False
+
+    # Alternate head exploration and tiny motion when possible.
+    if state.last_curiosity_ability != "look_around" and "look_around" in body.capabilities:
+        command = Command(
+            target=interface_id,
+            ability="look_around",
+            data={"amplitude_deg": 28, "pause_ms": 350},
+        )
+    elif "move" in body.capabilities:
+        command = Command(
+            target=interface_id,
+            ability="move",
+            data={
+                "direction": "forward",
+                "speed": 18,
+                "duration_ms": 350,
+                "steering_deg": 0,
+            },
+        )
+    elif "look_around" in body.capabilities:
+        command = Command(
+            target=interface_id,
+            ability="look_around",
+            data={"amplitude_deg": 28, "pause_ms": 350},
+        )
+    else:
+        return False
+
+    sent, _ = await send_command(command)
+    if sent:
+        state.last_curiosity_action_at = now
+        state.last_curiosity_ability = command.ability
+        state.curiosity = 0.18
+        state.persist_runtime()
+        return True
+
+    return False
+
+
 async def executive_loop():
     while True:
-        await asyncio.sleep(settings.heartbeat_seconds); state.boredom=min(1,state.boredom+.02); state.social_drive=min(1,state.social_drive+.01); state.persist_runtime()
+        await asyncio.sleep(settings.heartbeat_seconds)
+        state.boredom = min(1.0, state.boredom + 0.02)
+        state.social_drive = min(1.0, state.social_drive + 0.01)
+        state.curiosity = min(
+            1.0,
+            state.curiosity + settings.curiosity_increment,
+        )
+        await maybe_explore_from_curiosity()
+        state.persist_runtime()
