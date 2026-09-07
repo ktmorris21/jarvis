@@ -9,16 +9,14 @@ import websockets
 from .abilities import PiCarAbilities
 from .audio_io import AudioIO
 from .hardware import PiCarHardware
+from .vad import EnergyVad, VadConfig
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-async def upload_utterance(args, audio_io):
-    print(f"Listening for {args.record_seconds} seconds...")
-    wav = await audio_io.record_once()
-    print("Sending utterance to Jarvis Core...")
+async def upload_wav(args, wav: bytes):
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
             args.url.rstrip("/") + "/audio/utterance",
@@ -34,42 +32,107 @@ async def upload_utterance(args, audio_io):
         print("Heard:", payload.get("text") or "(no speech)")
 
 
+async def manual_listen(args, audio_io):
+    print(f"Listening for {args.record_seconds} seconds...")
+    wav = await audio_io.record_once()
+    print("Sending utterance to Jarvis Core...")
+    await upload_wav(args, wav)
+
+
 async def console_loop(args, audio_io):
-    print("Audio test ready. Type 'listen' and press Enter.")
+    print("Commands: listen | quit")
     while True:
-        command = await asyncio.to_thread(input, "> ")
-        if command.strip().lower() == "listen":
+        command = (await asyncio.to_thread(input, "> ")).strip().lower()
+        if command == "listen":
             try:
-                await upload_utterance(args, audio_io)
+                await manual_listen(args, audio_io)
             except Exception as e:
                 print("Audio capture/upload failed:", e)
+        elif command == "quit":
+            return
+
+
+async def vad_loop(args):
+    config = VadConfig(
+        end_silence_ms=args.vad_end_silence_ms,
+        max_utterance_seconds=args.vad_max_seconds,
+        calibration_seconds=args.vad_calibration_seconds,
+        threshold_multiplier=args.vad_threshold_multiplier,
+        minimum_threshold=args.vad_min_threshold,
+    )
+    vad = EnergyVad(args.audio_input, config)
+    try:
+        async for item in vad.utterances():
+            if item["type"] == "calibration":
+                print(
+                    "VAD calibrated:"
+                    f" baseline RMS={item['baseline_rms']},"
+                    f" threshold={item['threshold_rms']}"
+                )
+                print("Listening automatically. Speak near Jarvis...")
+                continue
+
+            print(
+                f"Speech detected: {item['duration_seconds']}s"
+                f" ({item['ended_by']}); sending to Core..."
+            )
+            try:
+                await upload_wav(args, item["wav"])
+            except Exception as e:
+                print("Utterance upload failed:", e)
+    finally:
+        await vad.close()
 
 
 async def websocket_loop(args, hw, abilities):
     while True:
         try:
-            u = args.url.rstrip("/").replace("https://","wss://").replace("http://","ws://") + f"/ws?token={args.token}"
+            u = (
+                args.url.rstrip("/")
+                .replace("https://", "wss://")
+                .replace("http://", "ws://")
+                + f"/ws?token={args.token}"
+            )
             async with websockets.connect(u) as ws:
                 await ws.send(json.dumps({
-                    "type":"hello",
-                    "interface_id":args.interface_id,
-                    "interface_type":"mobile_body",
-                    "capabilities":["look","move","stop","speaker","audio_input","audio_output"],
+                    "type": "hello",
+                    "interface_id": args.interface_id,
+                    "interface_type": "mobile_body",
+                    "capabilities": [
+                        "look", "move", "stop",
+                        "speaker", "audio_input", "audio_output"
+                    ],
                 }))
                 print("Connected:", json.loads(await ws.recv()))
+
                 async for raw in ws:
                     m = json.loads(raw)
                     if m.get("type") != "command":
                         continue
-                    cid=m.get("command_id","unknown"); ability=m.get("ability","")
+
+                    cid = m.get("command_id", "unknown")
+                    ability = m.get("ability", "")
                     try:
-                        result=await abilities.execute(ability,m.get("data") or {})
-                        status="complete"; error=None
+                        result = await abilities.execute(ability, m.get("data") or {})
+                        status = "complete"
+                        error = None
                     except Exception as e:
-                        hw.stop(); result=None; status="failed"; error=str(e)
+                        hw.stop()
+                        result = None
+                        status = "failed"
+                        error = str(e)
+
                     await ws.send(json.dumps({
-                        "type":"event","event":"COMMAND_RESULT","timestamp":now_iso(),
-                        "data":{"command_id":cid,"ability":ability,"status":status,"result":result,"error":error}
+                        "type": "event",
+                        "event": "COMMAND_RESULT",
+                        "timestamp": now_iso(),
+                        "data": {
+                            "command_id": cid,
+                            "ability": ability,
+                            "status": status,
+                            "result": result,
+                            "error": error,
+                        },
                     }))
         except Exception as e:
             hw.stop()
@@ -81,19 +144,32 @@ async def run(args):
     hw = PiCarHardware(args.mock)
     audio_io = AudioIO(args.audio_input, args.audio_output, args.record_seconds)
     abilities = PiCarAbilities(hw, audio_io)
-    await asyncio.gather(
-        websocket_loop(args, hw, abilities),
-        console_loop(args, audio_io),
-    )
+
+    tasks = [websocket_loop(args, hw, abilities)]
+    if args.vad:
+        tasks.append(vad_loop(args))
+    else:
+        tasks.append(console_loop(args, audio_io))
+
+    await asyncio.gather(*tasks)
 
 
-if __name__=="__main__":
-    p=argparse.ArgumentParser()
-    p.add_argument("--url",required=True)
-    p.add_argument("--token",required=True)
-    p.add_argument("--interface-id",default="picar-main")
-    p.add_argument("--mock",action="store_true")
-    p.add_argument("--audio-input",default="plughw:2,0")
-    p.add_argument("--audio-output",default="plughw:2,0")
-    p.add_argument("--record-seconds",type=int,default=5)
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--url", required=True)
+    p.add_argument("--token", required=True)
+    p.add_argument("--interface-id", default="picar-main")
+    p.add_argument("--mock", action="store_true")
+
+    p.add_argument("--audio-input", default="plughw:2,0")
+    p.add_argument("--audio-output", default="plughw:2,0")
+    p.add_argument("--record-seconds", type=int, default=5)
+
+    p.add_argument("--vad", action="store_true")
+    p.add_argument("--vad-end-silence-ms", type=int, default=750)
+    p.add_argument("--vad-max-seconds", type=float, default=12.0)
+    p.add_argument("--vad-calibration-seconds", type=float, default=1.5)
+    p.add_argument("--vad-threshold-multiplier", type=float, default=3.0)
+    p.add_argument("--vad-min-threshold", type=int, default=350)
+
     asyncio.run(run(p.parse_args()))
