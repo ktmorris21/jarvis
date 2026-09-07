@@ -1,7 +1,5 @@
 import os
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 class Settings(BaseSettings):
     interface_token: str = "change-me"
@@ -10,13 +8,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
     database_url: str = "sqlite:///./jarvis.db"
-
-    model_config = SettingsConfigDict(
-        env_prefix="JARVIS_",
-        env_file=".env",
-        extra="ignore",
-    )
-
+    model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=".env", extra="ignore")
 
 settings = Settings()
 settings.openai_api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")

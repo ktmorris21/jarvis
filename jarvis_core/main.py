@@ -1,156 +1,67 @@
 import asyncio
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, WebSocketException, status
+from fastapi import FastAPI,Header,HTTPException,Query,WebSocket,WebSocketDisconnect,WebSocketException,status
 from pydantic import ValidationError
-
 from .config import settings
-from .executive import executive_loop, handle_event, send_command
-from .models import Command, DebugCommandRequest, InterfaceEvent, InterfaceHello, MemoryCreateRequest, MemorySearchRequest
-from .state import InterfaceConnection, state
+from .executive import executive_loop,handle_event,send_command
+from .models import Command,DebugCommandRequest,GoalCreateRequest,InterfaceEvent,InterfaceHello,MemoryCreateRequest,MemorySearchRequest
 from .persistence import init_db
-
+from .persistence.repository import repository
+from .state import InterfaceConnection,state
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    state.restore()
-    task = asyncio.create_task(executive_loop())
-    yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+async def lifespan(app:FastAPI):
+    init_db(); state.restore(); task=asyncio.create_task(executive_loop()); yield; task.cancel()
+    try: await task
+    except asyncio.CancelledError: pass
 
-
-app = FastAPI(title="Jarvis Core v1 Phase 2", lifespan=lifespan)
-
-
+app=FastAPI(title="Jarvis Core v1 Attention",lifespan=lifespan)
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "jarvis-core", "phase": "v1-phase2-memory"}
-
-
+async def health(): return {"status":"ok","service":"jarvis-core","phase":"v1-attention"}
 @app.get("/state")
-async def get_state():
-    return await state.snapshot()
-
-
-@app.post("/debug/command")
-async def debug_command(
-    request: DebugCommandRequest,
-    x_jarvis_token: str = Header(default=""),
-):
-    """POC-only manual capability exerciser. Delete when no longer useful."""
-    if x_jarvis_token != settings.interface_token:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    command = Command(
-        target=request.target,
-        ability=request.ability,
-        data=request.data,
-    )
-    sent, route = await send_command(command)
-    if not sent:
-        raise HTTPException(status_code=409, detail=route)
-    return {
-        "status": "sent",
-        "command_id": command.command_id,
-        "target": route,
-        "ability": command.ability,
-    }
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(default="")):
-    if token != settings.interface_token:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-
-    await websocket.accept()
-    interface_id: str | None = None
-
-    try:
-        first = await websocket.receive_json()
-        hello = InterfaceHello.model_validate(first)
-        interface_id = hello.interface_id
-
-        await state.register(
-            InterfaceConnection(
-                interface_id=hello.interface_id,
-                interface_type=hello.interface_type,
-                capabilities=hello.capabilities,
-                websocket=websocket,
-            )
-        )
-
-        await websocket.send_json({
-            "type": "hello_ack",
-            "interface_id": interface_id,
-            "core": "jarvis",
-        })
-
-        while True:
-            payload = await websocket.receive_json()
-            try:
-                event = InterfaceEvent.model_validate(payload)
-            except ValidationError as exc:
-                await websocket.send_json({"type": "error", "detail": str(exc)})
-                continue
-            await handle_event(event, source=interface_id or "unknown")
-
-    except WebSocketDisconnect:
-        pass
-    finally:
-        if interface_id:
-            await state.unregister(interface_id)
-
+async def get_state(): return await state.snapshot()
 @app.get("/events")
-async def get_events(limit: int = 50):
-    from .persistence.repository import repository
-    return {"events": repository.recent_events(min(max(limit, 1), 200))}
-
-
+async def get_events(limit:int=50): return {"events":repository.recent_events(min(max(limit,1),200))}
 @app.get("/goals")
-async def get_goals(status_filter: str | None = None):
-    from .persistence.repository import repository
-    return {"goals": repository.goals(status_filter)}
-
-
+async def get_goals(status_filter:str|None=None): return {"goals":repository.goals(status_filter)}
+@app.post("/goals")
+async def create_goal(req:GoalCreateRequest,x_jarvis_token:str=Header(default="")):
+    if x_jarvis_token!=settings.interface_token: raise HTTPException(401,"Invalid token")
+    data=dict(req.data); data["event_subscriptions"]=req.event_subscriptions
+    return {"goal_id":repository.create_goal(req.kind,req.description,req.priority,data)}
 @app.get("/actions")
-async def get_actions(limit: int = 50):
-    from .persistence.repository import repository
-    return {"actions": repository.recent_actions(min(max(limit, 1), 200))}
-
-
+async def get_actions(limit:int=50): return {"actions":repository.recent_actions(min(max(limit,1),200))}
 @app.get("/memories")
-async def get_memories(limit: int = 50, memory_type: str | None = None):
-    from .persistence.repository import repository
-    return {"memories": repository.memories(min(max(limit, 1), 200), memory_type)}
-
-
+async def get_memories(limit:int=50,memory_type:str|None=None): return {"memories":repository.memories(min(max(limit,1),200),memory_type)}
 @app.post("/memories")
-async def create_memory(
-    request: MemoryCreateRequest,
-    x_jarvis_token: str = Header(default=""),
-):
-    if x_jarvis_token != settings.interface_token:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    if request.memory_type != "semantic":
-        raise HTTPException(status_code=400, detail="Phase 2 explicit creation only permits semantic memories")
+async def create_memory(req:MemoryCreateRequest,x_jarvis_token:str=Header(default="")):
+    if x_jarvis_token!=settings.interface_token: raise HTTPException(401,"Invalid token")
+    if req.memory_type!="semantic": raise HTTPException(400,"explicit creation only permits semantic memories")
     from .memory import memory
-    memory_id = memory.remember_semantic(
-        request.content, tags=request.tags, salience=request.salience, source="api"
-    )
-    return {"status": "remembered", "memory_id": memory_id}
-
-
+    return {"memory_id":memory.remember_semantic(req.content,tags=req.tags,salience=req.salience,source="api")}
 @app.post("/memories/search")
-async def search_memories(
-    request: MemorySearchRequest,
-    x_jarvis_token: str = Header(default=""),
-):
-    if x_jarvis_token != settings.interface_token:
-        raise HTTPException(status_code=401, detail="Invalid token")
+async def search_memories(req:MemorySearchRequest,x_jarvis_token:str=Header(default="")):
+    if x_jarvis_token!=settings.interface_token: raise HTTPException(401,"Invalid token")
     from .memory import memory
-    return {"memories": memory.retrieve(request.query, limit=request.limit, memory_type=request.memory_type)}
+    return {"memories":memory.retrieve(req.query,limit=req.limit,memory_type=req.memory_type)}
+@app.post("/debug/command")
+async def debug_command(req:DebugCommandRequest,x_jarvis_token:str=Header(default="")):
+    if x_jarvis_token!=settings.interface_token: raise HTTPException(401,"Invalid token")
+    cmd=Command(target=req.target,ability=req.ability,data=req.data); sent,route=await send_command(cmd)
+    if not sent: raise HTTPException(409,route)
+    return {"status":"sent","command_id":cmd.command_id,"target":route,"ability":cmd.ability}
+@app.websocket("/ws")
+async def ws_endpoint(ws:WebSocket,token:str=Query(default="")):
+    if token!=settings.interface_token: raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    await ws.accept(); iid=None
+    try:
+        hello=InterfaceHello.model_validate(await ws.receive_json()); iid=hello.interface_id
+        await state.register(InterfaceConnection(iid,hello.interface_type,hello.capabilities,ws)); await ws.send_json({"type":"hello_ack","interface_id":iid,"core":"jarvis"})
+        while True:
+            payload=await ws.receive_json()
+            try: event=InterfaceEvent.model_validate(payload)
+            except ValidationError as e: await ws.send_json({"type":"error","detail":str(e)}); continue
+            await handle_event(event,source=iid or "unknown")
+    except WebSocketDisconnect: pass
+    finally:
+        if iid: await state.unregister(iid)

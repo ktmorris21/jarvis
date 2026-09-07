@@ -1,13 +1,9 @@
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
-
 from pydantic import BaseModel, Field
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
+def utc_now(): return datetime.now(timezone.utc)
 
 class InterfaceEvent(BaseModel):
     type: str = "event"
@@ -15,13 +11,11 @@ class InterfaceEvent(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=utc_now)
 
-
 class InterfaceHello(BaseModel):
     type: str = "hello"
     interface_id: str
     interface_type: str = "generic"
     capabilities: list[str] = Field(default_factory=list)
-
 
 class Command(BaseModel):
     type: str = "command"
@@ -31,12 +25,10 @@ class Command(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=utc_now)
 
-
 class DebugCommandRequest(BaseModel):
     target: str
     ability: str
     data: dict[str, Any] = Field(default_factory=dict)
-
 
 class MemoryCreateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
@@ -44,8 +36,14 @@ class MemoryCreateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     salience: float = Field(default=0.7, ge=0.0, le=1.0)
 
-
 class MemorySearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     limit: int = Field(default=5, ge=1, le=20)
     memory_type: str | None = None
+
+class GoalCreateRequest(BaseModel):
+    kind: str
+    description: str
+    priority: int = Field(default=50, ge=0, le=100)
+    event_subscriptions: list[str] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
