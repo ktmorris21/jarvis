@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from .config import settings
 from .executive import executive_loop, handle_event, send_command
-from .models import Command, DebugCommandRequest, InterfaceEvent, InterfaceHello
+from .models import Command, DebugCommandRequest, InterfaceEvent, InterfaceHello, MemoryCreateRequest, MemorySearchRequest
 from .state import InterfaceConnection, state
 from .persistence import init_db
 
@@ -24,12 +24,12 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title="Jarvis Core POC", lifespan=lifespan)
+app = FastAPI(title="Jarvis Core v1 Phase 2", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "jarvis-core"}
+    return {"status": "ok", "service": "jarvis-core", "phase": "v1-phase2-memory"}
 
 
 @app.get("/state")
@@ -121,3 +121,36 @@ async def get_goals(status_filter: str | None = None):
 async def get_actions(limit: int = 50):
     from .persistence.repository import repository
     return {"actions": repository.recent_actions(min(max(limit, 1), 200))}
+
+
+@app.get("/memories")
+async def get_memories(limit: int = 50, memory_type: str | None = None):
+    from .persistence.repository import repository
+    return {"memories": repository.memories(min(max(limit, 1), 200), memory_type)}
+
+
+@app.post("/memories")
+async def create_memory(
+    request: MemoryCreateRequest,
+    x_jarvis_token: str = Header(default=""),
+):
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if request.memory_type != "semantic":
+        raise HTTPException(status_code=400, detail="Phase 2 explicit creation only permits semantic memories")
+    from .memory import memory
+    memory_id = memory.remember_semantic(
+        request.content, tags=request.tags, salience=request.salience, source="api"
+    )
+    return {"status": "remembered", "memory_id": memory_id}
+
+
+@app.post("/memories/search")
+async def search_memories(
+    request: MemorySearchRequest,
+    x_jarvis_token: str = Header(default=""),
+):
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    from .memory import memory
+    return {"memories": memory.retrieve(request.query, limit=request.limit, memory_type=request.memory_type)}

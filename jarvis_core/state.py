@@ -37,6 +37,8 @@ class JarvisState:
         self.last_cognition_reason: str | None = None
         self.last_cognition_at: datetime | None = None
         self.last_command_result: dict | None = None
+        self.last_formed_memory_ids: list[str] = []
+        self.last_retrieved_memory_ids: list[str] = []
         self._lock = asyncio.Lock()
 
     def restore(self) -> None:
@@ -90,6 +92,12 @@ class JarvisState:
                 "active_goals": repository.goals("active"),
                 "recent_actions": repository.recent_actions(8),
                 "last_command_result": self.last_command_result,
+                "memory": {
+                    "count": len(repository.memories(limit=10000)),
+                    "last_formed_ids": self.last_formed_memory_ids,
+                    "last_retrieved_ids": self.last_retrieved_memory_ids,
+                    "recent": repository.memories(limit=5),
+                },
                 "cognition": {"enabled": bool(settings.openai_api_key),"last_action": self.last_cognition_action,"last_reason": self.last_cognition_reason,"last_at": self.last_cognition_at.isoformat() if self.last_cognition_at else None},
             }
 

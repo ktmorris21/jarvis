@@ -102,5 +102,44 @@ class Repository:
         with SessionLocal() as session:
             session.add(row); session.commit(); return row.id
 
+    def memories(self, limit: int = 50, memory_type: str | None = None) -> list[dict]:
+        with SessionLocal() as session:
+            stmt = select(MemoryRow)
+            if memory_type:
+                stmt = stmt.where(MemoryRow.memory_type == memory_type)
+            stmt = stmt.order_by(desc(MemoryRow.created_at)).limit(limit)
+            rows = session.scalars(stmt).all()
+            return [{
+                "id": r.id,
+                "memory_type": r.memory_type,
+                "content": r.content,
+                "data": r.data or {},
+                "salience": r.salience,
+                "created_at": r.created_at.isoformat(),
+            } for r in rows]
+
+    def get_memory(self, memory_id: str) -> dict | None:
+        with SessionLocal() as session:
+            r = session.get(MemoryRow, memory_id)
+            if r is None:
+                return None
+            return {
+                "id": r.id, "memory_type": r.memory_type, "content": r.content,
+                "data": r.data or {}, "salience": r.salience, "created_at": r.created_at.isoformat(),
+            }
+
+    def note_memories_retrieved(self, memory_ids: list[str]) -> None:
+        if not memory_ids:
+            return
+        now = utc_now().isoformat()
+        with SessionLocal() as session:
+            rows = session.scalars(select(MemoryRow).where(MemoryRow.id.in_(memory_ids))).all()
+            for row in rows:
+                data = dict(row.data or {})
+                data["retrieval_count"] = int(data.get("retrieval_count", 0)) + 1
+                data["last_retrieved_at"] = now
+                row.data = data
+            session.commit()
+
 
 repository = Repository()

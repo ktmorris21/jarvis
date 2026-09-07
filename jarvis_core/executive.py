@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from .cognition import cognition
 from .config import settings
 from .models import Command, InterfaceEvent
+from .memory import memory
 from .persistence.repository import repository
 from .state import state
 
@@ -43,18 +44,22 @@ async def send_command(command: Command) -> tuple[bool, str]:
 
 async def handle_event(event: InterfaceEvent, source: str = "unknown") -> None:
     now = utc_now()
-    repository.record_event(event_type=event.event, source=source, occurred_at=event.timestamp, data=event.data)
+    source_event_id = repository.record_event(event_type=event.event, source=source, occurred_at=event.timestamp, data=event.data)
     state.event_count += 1
     state.remember_event(event.event)
 
+    memory_context: dict = {}
+
     if event.event == "USER_ACTIVE":
         was_present = state.user_present
+        memory_context["was_present"] = was_present
         state.user_present = True
         state.last_user_activity = now
         state.boredom = max(0.0, state.boredom - 0.20)
         if not was_present:
             state.social_drive = min(1.0, state.social_drive + 0.35)
     elif event.event == "USER_IDLE":
+        memory_context["was_present"] = state.user_present
         state.user_present = False
     elif event.event == "USER_SPOKE":
         state.user_present = True
@@ -68,17 +73,32 @@ async def handle_event(event: InterfaceEvent, source: str = "unknown") -> None:
         if command_id:
             repository.complete_action_by_command(command_id, event.data)
 
+    created_memories = memory.form_from_event(
+        event_type=event.event,
+        source=source,
+        data=event.data,
+        source_event_id=source_event_id,
+        context=memory_context,
+    )
+    if created_memories:
+        state.last_formed_memory_ids = created_memories
     state.persist_runtime()
 
 
 async def consider_return_interaction() -> None:
     now = utc_now()
     since_interaction = (now - state.last_interaction).total_seconds() if state.last_interaction else None
+    relevant_memories = memory.retrieve(
+        "user return presence greeting prior interaction preference",
+        limit=5,
+    )
+    state.last_retrieved_memory_ids = [m["id"] for m in relevant_memories]
     decision = await cognition.consider_user_return(
         social_drive=state.social_drive,
         boredom=state.boredom,
         seconds_since_last_interaction=since_interaction,
         recent_events=list(state.recent_events),
+        relevant_memories=relevant_memories,
     )
     state.last_cognition_action = decision.action
     state.last_cognition_reason = decision.reason

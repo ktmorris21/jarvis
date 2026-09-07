@@ -36,3 +36,16 @@ class DebugCommandRequest(BaseModel):
     target: str
     ability: str
     data: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryCreateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+    memory_type: str = "semantic"
+    tags: list[str] = Field(default_factory=list)
+    salience: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class MemorySearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=5, ge=1, le=20)
+    memory_type: str | None = None
