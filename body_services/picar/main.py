@@ -237,7 +237,7 @@ async def websocket_loop(args, hw, abilities):
 async def run(args):
     hw = PiCarHardware(args.mock)
     audio_io = AudioIO(args.audio_input, args.audio_output, args.record_seconds)
-    abilities = PiCarAbilities(hw, audio_io, collision_distance_cm=args.collision_distance_cm)
+    abilities = PiCarAbilities(hw, audio_io)
     camera_io = CameraIO(args.camera_width, args.camera_height)
 
     tasks = [websocket_loop(args, hw, abilities)]
@@ -262,7 +262,6 @@ if __name__ == "__main__":
     p.add_argument("--audio-input", default="plughw:2,0")
     p.add_argument("--audio-output", default="plughw:2,0")
     p.add_argument("--record-seconds", type=int, default=5)
-    p.add_argument("--collision-distance-cm", type=float, default=22.0)
     p.add_argument("--camera-width", type=int, default=640)
     p.add_argument("--camera-height", type=int, default=480)
     p.add_argument("--auto-vision", action="store_true")

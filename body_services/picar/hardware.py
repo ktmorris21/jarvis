@@ -9,17 +9,6 @@ class PiCarHardware:
             from picarx import Picarx
             self._px=Picarx()
     def _clamp(self,v,lo,hi): return max(lo,min(hi,v))
-    def distance_cm(self):
-        """Read front ultrasonic distance in cm; None means unavailable/invalid."""
-        if self.mock:
-            return 100.0
-        try:
-            value=float(self._px.get_distance())
-        except Exception:
-            return None
-        if value <= 0 or value > 500:
-            return None
-        return value
 
     def stop(self):
         if self.mock: return
