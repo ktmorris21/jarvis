@@ -65,6 +65,19 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
     elif event.event=="COMMAND_RESULT":
         state.last_command_result=event.data; cid=event.data.get("command_id");
         if cid: repository.complete_action_by_command(cid,event.data)
+        # ROS status is operational world state, not long-term memory.
+        connection = state.interfaces.get(source)
+        if (connection is not None
+                and connection.interface_type == "ros_status"
+                and event.data.get("ability") == "get_robot_status"
+                and event.data.get("status") == "complete"
+                and isinstance(event.data.get("result"), dict)):
+            result = event.data["result"]
+            if result.get("robot_id") and result.get("observed_at"):
+                repository.upsert_state(
+                    f"robot_status:{source}", "robot_status",
+                    {"source": source, "received_at": utc_now().isoformat(), **result},
+                )
 
     formed=memory.form_from_event(event_type=event.event,source=source,data=event.data,source_event_id=source_event_id,context=memory_context)
     if formed: state.last_formed_memory_ids=formed
