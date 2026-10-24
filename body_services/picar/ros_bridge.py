@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -175,8 +176,8 @@ async def bridge_loop(args, node):
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only ROS status bridge for Jarvis Core")
-    parser.add_argument("--url", required=True, help="Jarvis Core HTTPS base URL")
-    parser.add_argument("--token", required=True, help="Jarvis interface token")
+    parser.add_argument("--url", default=os.getenv("JARVIS_URL"), required=False, help="Jarvis Core HTTPS base URL")
+    parser.add_argument("--token", default=os.getenv("JARVIS_TOKEN"), required=False, help="Jarvis interface token (prefer JARVIS_TOKEN env var)")
     parser.add_argument("--interface-id", default="picar-ros")
     parser.add_argument("--robot-id", default="picar-main")
     parser.add_argument("--scan-topic", default="/scan")
@@ -184,6 +185,8 @@ def main():
     parser.add_argument("--map-frame", default="map")
     parser.add_argument("--base-frame", default="base_link")
     args = parser.parse_args()
+    if not args.url or not args.token:
+        parser.error("Provide URL/token via flags or JARVIS_URL/JARVIS_TOKEN environment variables")
     if not args.url.startswith("https://") and not args.url.startswith("http://localhost:"):
         parser.error("Use HTTPS for Core connections (localhost HTTP allowed for testing)")
     rclpy.init()
