@@ -1,0 +1,18 @@
+[Unit]
+Description=Jarvis read-only ROS to Core bridge for %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/jarvis
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/jarvis/bridge.env
+ExecStart=/bin/bash /home/%i/jarvis/ops/run_bridge.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
