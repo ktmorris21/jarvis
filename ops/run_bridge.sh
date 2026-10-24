@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 source /opt/ros/jazzy/setup.bash
 source "$HOME/ros2_ws/install/setup.bash"
 cd "$HOME/jarvis"
