@@ -1,0 +1,18 @@
+[Unit]
+Description=Jarvis ROS 2 mapping stack for %i
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /home/%i/jarvis/ops/run_mapping.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
