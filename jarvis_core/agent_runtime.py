@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from .config import settings
-from .context_builder import IDENTITY
+from .identity import IDENTITY
 from .memory import memory
 from .persistence.repository import repository
 from .state import state
@@ -97,7 +97,7 @@ def _session_instance():
 
 
 async def agent_reply(text: str) -> str:
-    """Run a bounded agent turn; caller owns speech output and old-path fallback."""
+    """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
     from agents import Agent, Runner, function_tool, ModelSettings
 
     @function_tool
