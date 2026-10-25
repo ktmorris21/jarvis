@@ -7,7 +7,9 @@ from jarvis_core.agent_runtime import (
 from jarvis_core.config import settings
 
 
-def test_baseline_does_not_include_transcript():
+def test_baseline_does_not_include_transcript(monkeypatch):
+    from jarvis_core.agent_runtime import repository
+    monkeypatch.setattr(repository, 'goals', lambda *args: [])
     text = baseline_context()
     assert "one persistent agent" in text
     assert "get_robot_status" in text
