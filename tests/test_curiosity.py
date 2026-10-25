@@ -1,6 +1,7 @@
 import asyncio
 
 from jarvis_core.executive import maybe_explore_from_curiosity
+from jarvis_core.config import settings
 from jarvis_core.persistence import init_db
 from jarvis_core.persistence.db import SessionLocal
 from jarvis_core.persistence.tables import GoalRow
@@ -21,7 +22,8 @@ def clear_goals():
         session.commit()
 
 
-def test_curiosity_uses_generic_mobile_body_capability():
+def test_curiosity_uses_generic_mobile_body_capability(monkeypatch):
+    monkeypatch.setattr(settings, 'autonomous_curiosity_enabled', True)
     async def run():
         init_db()
         clear_goals()
@@ -50,7 +52,8 @@ def test_curiosity_uses_generic_mobile_body_capability():
     asyncio.run(run())
 
 
-def test_curiosity_alternates_to_small_move():
+def test_curiosity_alternates_to_small_move(monkeypatch):
+    monkeypatch.setattr(settings, 'autonomous_curiosity_enabled', True)
     async def run():
         init_db()
         clear_goals()
@@ -79,7 +82,8 @@ def test_curiosity_alternates_to_small_move():
     asyncio.run(run())
 
 
-def test_active_goal_suppresses_idle_curiosity():
+def test_active_goal_suppresses_idle_curiosity(monkeypatch):
+    monkeypatch.setattr(settings, 'autonomous_curiosity_enabled', True)
     async def run():
         init_db()
         clear_goals()
