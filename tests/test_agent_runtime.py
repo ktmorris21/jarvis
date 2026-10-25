@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from jarvis_core.agent_runtime import (
     baseline_context, deliver_status_result, get_robot_status_data,
     search_memory_data,
@@ -20,8 +18,7 @@ def test_autonomous_curiosity_disabled_by_default():
     assert settings.autonomous_curiosity_enabled is False
 
 
-@pytest.mark.asyncio
-async def test_status_tool_matches_command_and_waits(monkeypatch):
+def test_status_tool_matches_command_and_waits(monkeypatch):
     from jarvis_core import executive
     from jarvis_core.agent_runtime import _pending_status
 
@@ -34,21 +31,20 @@ async def test_status_tool_matches_command_and_waits(monkeypatch):
         return True, "picar-ros"
 
     monkeypatch.setattr(executive, "send_command", fake_send)
-    result = await get_robot_status_data()
+    result = asyncio.run(get_robot_status_data())
     assert result["available"]
     assert result["status"]["lidar"]["active"] is True
     assert not _pending_status
 
 
-@pytest.mark.asyncio
-async def test_status_tool_unavailable(monkeypatch):
+def test_status_tool_unavailable(monkeypatch):
     from jarvis_core import executive
 
     async def fake_send(command):
         return False, "Robot offline"
 
     monkeypatch.setattr(executive, "send_command", fake_send)
-    assert (await get_robot_status_data()) == {
+    assert asyncio.run(get_robot_status_data()) == {
         "available": False, "reason": "Robot offline"
     }
 
