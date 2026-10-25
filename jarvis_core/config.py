@@ -4,6 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     interface_token: str = "change-me"
     heartbeat_seconds: float = 2.0
+    agent_enabled: bool = False
+    agent_model: str = "gpt-5.6-luna"
+    agent_max_turns: int = 4
+    agent_timeout_seconds: float = 50.0
+    agent_status_timeout_seconds: float = 6.0
+    autonomous_curiosity_enabled: bool = False
     curiosity_trigger: float = 0.75
     curiosity_increment: float = 0.01
     curiosity_cooldown_seconds: float = 45.0
