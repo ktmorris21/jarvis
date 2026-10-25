@@ -65,6 +65,8 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
     elif event.event=="COMMAND_RESULT":
         state.last_command_result=event.data; cid=event.data.get("command_id");
         if cid: repository.complete_action_by_command(cid,event.data)
+        from .agent_runtime import deliver_status_result
+        deliver_status_result(event.data)
         # ROS status is operational world state, not long-term memory.
         connection = state.interfaces.get(source)
         if (connection is not None
@@ -99,6 +101,15 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
 
 async def respond_to_user_speech(text: str, source: str):
     # Verbatim short-term context is separate from durable memory.
+    if settings.agent_enabled and settings.openai_api_key:
+        try:
+            from .agent_runtime import agent_reply
+            reply = await agent_reply(text)
+            await deliver_agent_speech(reply, source)
+            return
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Agent turn failed; using legacy cognition")
     working_memory.add_turn("user", text, source)
 
     draft = context_builder.gather(text, source)
@@ -144,6 +155,20 @@ async def respond_to_user_speech(text: str, source: str):
     state.persist_runtime()
 
 
+async def deliver_agent_speech(reply: str, source: str):
+    connection = state.interfaces.get(source)
+    data = {"text": reply}
+    if connection and "audio_output" in connection.capabilities:
+        try:
+            data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
+        except Exception:
+            pass
+    target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
+    await send_command(Command(target=target, ability="speaker", data=data))
+    state.last_interaction = utc_now()
+    state.persist_runtime()
+
+
 async def consider_return_interaction():
     now=utc_now(); since=(now-state.last_interaction).total_seconds() if state.last_interaction else None
     memories=memory.retrieve("user return presence greeting prior interaction preference",limit=5); state.last_retrieved_memory_ids=[m["id"] for m in memories]
@@ -171,6 +196,8 @@ async def maybe_explore_from_curiosity():
     """Initiate one tiny exploratory behavior when Jarvis is idle."""
     now = utc_now()
 
+    if not settings.autonomous_curiosity_enabled:
+        return False
     if state.curiosity < settings.curiosity_trigger:
         return False
 
