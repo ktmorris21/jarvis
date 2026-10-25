@@ -23,18 +23,11 @@ async def get_state(): return await state.snapshot()
 
 @app.get("/context")
 async def get_context():
-    from .working_memory import working_memory
     return {
-        "last": state.last_context or repository.get_state("context:last"),
-        "working_memory": working_memory.turns(),
+        "engine": "openai-agents-sdk",
+        "session": "jarvis-primary",
+        "history": "managed by the Agents SDK persistent SQLAlchemy session",
     }
-
-@app.post("/context/clear")
-async def clear_context(x_jarvis_token:str=Header(default="")):
-    if x_jarvis_token!=settings.interface_token: raise HTTPException(401,"Invalid token")
-    from .working_memory import working_memory
-    working_memory.clear()
-    return {"status":"cleared"}
 
 @app.get("/events")
 async def get_events(limit:int=50): return {"events":repository.recent_events(min(max(limit,1),200))}
