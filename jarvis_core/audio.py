@@ -51,6 +51,7 @@ class AudioService:
             response = await self._get_client().audio.speech.create(
                 model=settings.tts_model,
                 voice=settings.tts_voice,
+                instructions=settings.tts_instructions,
                 input=text,
                 response_format="wav",
             )
