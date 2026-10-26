@@ -38,10 +38,10 @@ def is_dismissal(transcript):
     """Recognize complete farewells, not phrases embedded in real questions."""
     cleaned = transcript.lower().replace("’", "'")
     cleaned = re.sub(r"[^a-z0-9' ]", " ", cleaned)
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     # Permit common polite lead-ins and trailing conversational particles.
-    cleaned = re.sub(r"^(?:okay|ok|alright|well|so|right)\\s+", "", cleaned)
-    cleaned = re.sub(r"\\s+(?:please|for now|then)$", "", cleaned)
+    cleaned = re.sub(r"^(?:okay|ok|alright|well|so|right)\s+", "", cleaned)
+    cleaned = re.sub(r"\s+(?:please|for now|then)$", "", cleaned)
     if re.fullmatch(r"(?:thanks|thank you)(?: jarvis)?(?: (?:that'll be|that will be|that's|that is) all)?", cleaned):
         return True
     return any(re.fullmatch(pattern, cleaned) for pattern in DISMISSAL_PATTERNS)
@@ -221,7 +221,7 @@ async def main(args):
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
     context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
     instructions = (context["instructions"] +
-        "\\nVOICE IDENTITY — HIGHEST PRIORITY FOR SPOKEN DELIVERY:\n"
+        "\nVOICE IDENTITY — HIGHEST PRIORITY FOR SPOKEN DELIVERY:\n"
         "You ARE Jarvis. Your PiCar-X is your physical body; ROS, LiDAR, camera, "
         "motors, and mapping belong to your robot embodiment. The Railway Core "
         "maintains your continuing identity and memories across interfaces. "
