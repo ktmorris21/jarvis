@@ -18,7 +18,13 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./jarvis.db"
     stt_model: str = "gpt-4o-mini-transcribe"
     tts_model: str = "gpt-4o-mini-tts"
-    tts_voice: str = "alloy"
+    tts_voice: str = "cedar"
+    tts_instructions: str = (
+        "Speak in a calm, refined British English accent, with crisp articulation "
+        "and measured pacing. Sound composed, intelligent, quietly warm, and "
+        "occasionally dryly witty. Avoid exaggerated theatricality, excessive "
+        "enthusiasm, or a cartoonish robot effect. Be natural and conversational."
+    )
     context_goal_limit: int = 8
     model_config = SettingsConfigDict(env_prefix="JARVIS_", env_file=".env", extra="ignore")
 
