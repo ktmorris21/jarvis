@@ -126,6 +126,7 @@ async def speak_turn(ws, head):
     audio_proc = None
     started_at = time.monotonic()
     await ws.send(json.dumps({"type": "response.create"}))
+    calls = []
     try:
         while True:
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
@@ -148,6 +149,7 @@ async def speak_turn(ws, head):
             elif kind == "response.output_audio_transcript.done":
                 print("[REALTIME] Jarvis:", event.get("transcript", ""), flush=True)
             elif kind == "response.done":
+                calls = [item for item in event.get("response", {}).get("output", []) if item.get("type") == "function_call"]
                 status = event.get("response", {}).get("status")
                 if status != "completed":
                     print("[REALTIME] Response status:", status, flush=True)
@@ -162,6 +164,21 @@ async def speak_turn(ws, head):
                     audio_proc.kill()
                     await audio_proc.wait()
         await head.set("idle")
+    if calls:
+        for call in calls:
+            try:
+                arguments = json.loads(call.get("arguments") or "{}")
+                result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
+                                         {"name": call["name"], "arguments": arguments})
+                output = json.dumps(result)
+            except Exception as exc:
+                output = json.dumps({"error": "Core tool failed: " + type(exc).__name__})
+                print("[REALTIME] Tool error:", repr(exc), flush=True)
+            print("[REALTIME] Tool:", call["name"], flush=True)
+            await ws.send(json.dumps({"type": "conversation.item.create",
+                                      "item": {"type": "function_call_output",
+                                               "call_id": call["call_id"], "output": output}}))
+        await speak_turn(ws, head)
 
 
 async def send_turn(ws, wav):
