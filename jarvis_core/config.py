@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     stt_model: str = "gpt-4o-mini-transcribe"
     tts_model: str = "gpt-4o-mini-tts"
     tts_voice: str = "onyx"
+    humor_level: int = 75
+    sarcasm_level: int = 65
     tts_instructions: str = (
         "Speak in a calm, refined British English accent, with crisp articulation "
         "and measured pacing. Sound composed, intelligent, quietly warm, and "
