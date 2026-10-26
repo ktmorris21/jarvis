@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Query,Request,WebSocket,WebSocketDisconnect,WebSocketException,status
 from pydantic import ValidationError
@@ -72,6 +73,7 @@ async def audio_utterance(
     if not wav_bytes or len(wav_bytes) > 5_000_000:
         raise HTTPException(400, "Expected a WAV body between 1 byte and 5 MB")
     from .audio import audio
+    request_start = time.perf_counter()
     try:
         text = await audio.transcribe_wav(wav_bytes)
     except Exception as e:
@@ -79,7 +81,19 @@ async def audio_utterance(
     if not text:
         return {"status": "no_speech", "text": ""}
     event = InterfaceEvent(event="USER_SPOKE", data={"text": text, "input_mode": "audio"})
-    await handle_event(event, source=x_jarvis_interface)
+    stt_end = time.perf_counter()
+    try:
+        await handle_event(event, source=x_jarvis_interface)
+    finally:
+        request_end = time.perf_counter()
+        print(
+            f"[VOICE TIMING] STT+request handling: "
+            f"{stt_end - request_start:.2f}s | "
+            f"Core event handling incl. TTS: "
+            f"{request_end - stt_end:.2f}s | "
+            f"Total: {request_end - request_start:.2f}s",
+            flush=True,
+        )
     return {"status": "accepted", "text": text}
 
 
