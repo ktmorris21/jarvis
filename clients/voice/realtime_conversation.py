@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import base64
 import getpass
+import httpx
 import json
 import os
 import re
@@ -17,7 +18,7 @@ import numpy as np
 import websockets
 
 from openwakeword.model import Model
-from realtime_poc import (DEVICE, INSTRUCTIONS, MODEL, REALTIME_URL, SAMPLE_RATE,
+from realtime_poc import (DEVICE, MODEL, REALTIME_URL, SAMPLE_RATE,
                           convert_wav_to_pcm24)
 from voice_interface import (CHUNK, RATE, HeadExpressions, listen_for_command,
                              make_wav, read_chunk, start_microphone, stop_microphone)
@@ -103,6 +104,21 @@ async def receive_until(ws, wanted, timeout=20):
             raise RuntimeError(str(event.get("error")))
         if event.get("type") == wanted:
             return event
+
+
+CORE_TOOLS = [
+ {"type":"function","name":"get_robot_status","description":"Get current robot, ROS, LiDAR and map health.","parameters":{"type":"object","properties":{}}},
+ {"type":"function","name":"search_memories","description":"Search Jarvis Core's persistent memories.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+]
+
+async def core_call(url, token, path, payload=None):
+    async with httpx.AsyncClient(timeout=25) as client:
+        if payload is None:
+            response = await client.get(url.rstrip("/") + path, headers={"X-Jarvis-Token":token})
+        else:
+            response = await client.post(url.rstrip("/") + path, headers={"X-Jarvis-Token":token}, json=payload)
+        response.raise_for_status()
+        return response.json()
 
 
 async def speak_turn(ws, head):
