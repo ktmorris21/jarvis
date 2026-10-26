@@ -202,8 +202,16 @@ async def send_turn(ws, wav):
 
 
 async def main(args):
-    global HEAD
+    global HEAD, CORE_URL, CORE_TOKEN
     key = os.environ.get("OPENAI_API_KEY") or getpass.getpass("OpenAI API key: ")
+    CORE_URL = args.core_url
+    CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
+    context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
+    instructions = (context["instructions"] +
+        "\nIn spoken replies, answer directly and concisely. Avoid filler and self-description. "
+        "Only use situational dry humor when genuinely appropriate. "
+        "Never guess current sensor values; call get_robot_status. "
+        "Use search_memories when recalling past experiences.")
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
     HEAD = HeadExpressions()
     await HEAD.start()
@@ -227,10 +235,9 @@ async def main(args):
                         "session": {
                             "type": "realtime",
                             "model": MODEL,
-                            "instructions": INSTRUCTIONS + (
-                                " If the user concludes the conversation, accept the end "
-                                "without a verbose farewell."
-                            ),
+                            "instructions": instructions,
+                            "tools": CORE_TOOLS,
+                            "tool_choice": "auto",
                             "output_modalities": ["audio"],
                             "audio": {
                                 "input": {
@@ -279,6 +286,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Experimental Realtime conversation mode")
+    parser.add_argument("--core-url", default="https://jarvis-production-110e.up.railway.app")
     parser.add_argument("--followup-seconds", type=int, default=20)
     parser.add_argument("--max-turns", type=int, default=12)
     parser.add_argument("--max-session-seconds", type=int, default=240)
