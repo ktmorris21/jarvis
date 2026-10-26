@@ -2,7 +2,7 @@
 """Jarvis Realtime Sprint 2: wake-word session, follow-ups, silent dismissal.
 
 Standalone experimental client; never run alongside jarvis-voice.service.
-Core/memory/tools are intentionally NOT integrated yet.
+Core identity, read-only tools, and short-lived Realtime authentication are integrated.
 """
 import argparse
 import asyncio
@@ -216,7 +216,6 @@ async def send_turn(ws, wav):
 
 async def main(args):
     global HEAD, CORE_URL, CORE_TOKEN
-    key = os.environ.get("OPENAI_API_KEY") or getpass.getpass("OpenAI API key: ")
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
     context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
@@ -254,9 +253,11 @@ async def main(args):
             await HEAD.set("thinking")
             opened = time.monotonic()
             try:
+                credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
+                print("[REALTIME] Credential received from Core.", flush=True)
                 async with websockets.connect(
                     REALTIME_URL,
-                    additional_headers={"Authorization": "Bearer " + key},
+                    additional_headers={"Authorization": "Bearer " + credential["value"]},
                     max_size=16 * 1024 * 1024,
                     open_timeout=15,
                     ping_interval=20,
@@ -282,7 +283,7 @@ async def main(args):
                                 },
                                 "output": {
                                     "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                                    "voice": "echo",
+                                    "voice": "ash",
                                 },
                             },
                         },
