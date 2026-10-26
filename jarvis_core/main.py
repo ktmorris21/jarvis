@@ -61,6 +61,44 @@ async def debug_command(req:DebugCommandRequest,x_jarvis_token:str=Header(defaul
     if not sent: raise HTTPException(409,route)
     return {"status":"sent","command_id":cmd.command_id,"target":route,"ability":cmd.ability}
 
+@app.post("/realtime/client-secret")
+async def realtime_client_secret(x_jarvis_token: str = Header(default="")):
+    """Issue a short-lived Realtime credential; never expose the permanent key."""
+    if not settings.interface_token or settings.interface_token == "change-me":
+        raise HTTPException(503, "Core interface authentication is not configured")
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    if not settings.openai_api_key:
+        raise HTTPException(503, "OpenAI key is not configured on Core")
+
+    import httpx
+    payload = {
+        "expires_after": {"anchor": "created_at", "seconds": 60},
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime-2.1-mini",
+            "audio": {"output": {"voice": "ash"}},
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/realtime/client_secrets",
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError:
+        raise HTTPException(502, "Could not create Realtime credential")
+    # Do not log or persist the short-lived credential.
+    return {"value": data["value"], "expires_at": data["expires_at"],
+            "model": "gpt-realtime-2.1-mini"}
+
+
 @app.get("/realtime/context")
 async def realtime_context(x_jarvis_token: str = Header(default="")):
     """Read-only Core identity and instructions for the experimental voice client."""
