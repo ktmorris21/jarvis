@@ -61,6 +61,38 @@ async def debug_command(req:DebugCommandRequest,x_jarvis_token:str=Header(defaul
     if not sent: raise HTTPException(409,route)
     return {"status":"sent","command_id":cmd.command_id,"target":route,"ability":cmd.ability}
 
+@app.get("/realtime/context")
+async def realtime_context(x_jarvis_token: str = Header(default="")):
+    """Read-only Core identity and instructions for the experimental voice client."""
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    from .agent_runtime import baseline_context
+    return {"instructions": baseline_context()}
+
+
+@app.post("/realtime/tool")
+async def realtime_tool(request: Request, x_jarvis_token: str = Header(default="")):
+    """Strictly allowlisted, read-only Core tools for the Realtime model."""
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    payload = await request.json()
+    name = payload.get("name")
+    args = payload.get("arguments", {})
+    if not isinstance(args, dict):
+        raise HTTPException(400, "Tool arguments must be an object")
+    from .agent_runtime import get_robot_status_data, search_memory_data
+    if name == "get_robot_status":
+        if args:
+            raise HTTPException(400, "get_robot_status takes no arguments")
+        return await get_robot_status_data()
+    if name == "search_memories":
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip() or len(query) > 500:
+            raise HTTPException(400, "query must be nonempty, max 500 characters")
+        return {"memories": search_memory_data(query)}
+    raise HTTPException(404, "Unknown or disallowed tool")
+
+
 @app.post("/audio/utterance")
 async def audio_utterance(
     request: Request,
