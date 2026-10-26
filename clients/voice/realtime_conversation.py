@@ -23,19 +23,28 @@ from realtime_poc import (DEVICE, MODEL, REALTIME_URL, SAMPLE_RATE,
 from voice_interface import (CHUNK, RATE, HeadExpressions, listen_for_command,
                              make_wav, read_chunk, start_microphone, stop_microphone)
 
-CLOSING = (
-    re.compile(r"^(?:okay|ok|alright|well|right|thanks|thank you|cheers)?[ ,.]*"
-               r"(?:jarvis[ ,.]+)?(?:that(?: is|'s| will|\u2019ll|\'ll) (?:be )?all|"
-               r"we(?: are|'re) done|goodbye|goodnight|bye|"
-               r"end (?:the )?conversation|stop listening)[.! ]*$", re.I),
-    re.compile(r"^(?:thanks|thank you)[ ,.]+jarvis[ ,.]+(?:that(?:'s| is|\u2019s) (?:all|everything)|"
-               r"that(?:'ll| will|\u2019ll) be all)[.! ]*$", re.I),
-)
+DISMISSAL_PATTERNS = [
+    r"(?:thanks|thank you)(?: jarvis)?",
+    r"(?:okay|ok|alright|right)(?: thanks| thank you)?(?: jarvis)?",
+    r"(?:goodbye|goodnight|bye)(?: jarvis)?",
+    r"(?:jarvis )?(?:that's|that is|that'll be|that will be) all",
+    r"(?:jarvis )?(?:we're|we are) (?:done|good)",
+    r"(?:jarvis )?(?:that will do|that'll do|we're all set|i'm all set)",
+    r"(?:jarvis )?(?:stop listening|end the conversation)",
+]
 
 
 def is_dismissal(transcript):
-    normalized = " ".join(transcript.strip().split())
-    return any(p.fullmatch(normalized) for p in CLOSING)
+    """Recognize complete farewells, not phrases embedded in real questions."""
+    cleaned = transcript.lower().replace("’", "'")
+    cleaned = re.sub(r"[^a-z0-9' ]", " ", cleaned)
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+    # Permit common polite lead-ins and trailing conversational particles.
+    cleaned = re.sub(r"^(?:okay|ok|alright|well|so|right)\\s+", "", cleaned)
+    cleaned = re.sub(r"\\s+(?:please|for now|then)$", "", cleaned)
+    if re.fullmatch(r"(?:thanks|thank you)(?: jarvis)?(?: (?:that'll be|that will be|that's|that is) all)?", cleaned):
+        return True
+    return any(re.fullmatch(pattern, cleaned) for pattern in DISMISSAL_PATTERNS)
 
 
 async def capture_followup(head, window):
@@ -108,6 +117,7 @@ async def receive_until(ws, wanted, timeout=20):
 
 CORE_TOOLS = [
  {"type":"function","name":"get_robot_status","description":"Get current robot, ROS, LiDAR and map health.","parameters":{"type":"object","properties":{}}},
+ {"type":"function","name":"finish_conversation","description":"End the voice session silently when the user is clearly dismissing you or saying they are done; call this instead of speaking any farewell.","parameters":{"type":"object","properties":{}}},
  {"type":"function","name":"search_memories","description":"Search Jarvis Core's persistent memories.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
 ]
 
@@ -166,6 +176,9 @@ async def speak_turn(ws, head):
         await head.set("idle")
     if calls:
         for call in calls:
+            if call.get("name") == "finish_conversation":
+                print("[REALTIME] Dismissal requested by model.", flush=True)
+                return False
             try:
                 arguments = json.loads(call.get("arguments") or "{}")
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
@@ -178,7 +191,8 @@ async def speak_turn(ws, head):
             await ws.send(json.dumps({"type": "conversation.item.create",
                                       "item": {"type": "function_call_output",
                                                "call_id": call["call_id"], "output": output}}))
-        await speak_turn(ws, head)
+        return await speak_turn(ws, head)
+    return True
 
 
 async def send_turn(ws, wav):
@@ -197,8 +211,7 @@ async def send_turn(ws, wav):
     if is_dismissal(transcript):
         print("[REALTIME] Dismissed: close silently.", flush=True)
         return False
-    await speak_turn(ws, HEAD)
-    return True
+    return await speak_turn(ws, HEAD)
 
 
 async def main(args):
@@ -208,10 +221,29 @@ async def main(args):
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
     context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
     instructions = (context["instructions"] +
-        "\nIn spoken replies, answer directly and concisely. Avoid filler and self-description. "
-        "Only use situational dry humor when genuinely appropriate. "
-        "Never guess current sensor values; call get_robot_status. "
-        "Use search_memories when recalling past experiences.")
+        "\\nVOICE IDENTITY — HIGHEST PRIORITY FOR SPOKEN DELIVERY:\\n"
+        "You ARE Jarvis. Your PiCar-X is your physical body; ROS, LiDAR, camera, "
+        "motors, and mapping belong to your robot embodiment. The Railway Core "
+        "maintains your continuing identity and memories across interfaces. "
+        "Never describe yourself as a chatbot, an assistant helping someone with "
+        "their robot, or an independent voice plugged into a third-party robot. "
+        "Say 'my LiDAR', 'my sensors', and 'my map' naturally. "
+        "Be candid about which physical abilities are available right now. "
+        "You can inspect live status and search memories using your Core tools; "
+        "you cannot command movement yet. Never invent data.\\n"
+        "SPOKEN STYLE:\\n"
+        "Understated, mature, composed, dryly witty on occasion. "
+        "A restrained, intelligent robotic companion—not a chirpy assistant. "
+        "No flattery, sales pitches, cheerleading, overly helpful sign-offs, "
+        "self-conscious jokes, nervous hedging, or descriptions of your own charm. "
+        "Don't repeatedly announce limitations; answer the question directly. "
+        "Usually speak one short sentence, two if needed. For 2+2 say 'Four.' "
+        "Be silent when nothing needs saying. Never force a joke. "
+        "If the user is ending the interaction, call finish_conversation; "
+        "do not respond with a farewell or an invitation for more questions. "
+        "Check your real Core tools for live sensor status or relevant memories. "
+        "Keep the humor subtle and leave it out entirely for simple queries.")
+
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
     HEAD = HeadExpressions()
     await HEAD.start()
@@ -250,7 +282,7 @@ async def main(args):
                                 },
                                 "output": {
                                     "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                                    "voice": "cedar",
+                                    "voice": "echo",
                                 },
                             },
                         },
