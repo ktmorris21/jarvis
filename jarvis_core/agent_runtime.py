@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from .config import settings
 from .identity import IDENTITY
+from .personality import personality_instructions
 from .memory import memory
 from .persistence.repository import repository
 from .state import state
@@ -31,7 +32,7 @@ def baseline_context() -> str:
         "active_goals": [{"kind": g.get("kind"), "description": g.get("description")}
                          for g in goals],
     }
-    return (IDENTITY + "\nCurrent Core state (snapshot, not sensor telemetry):\n"
+    return (IDENTITY + "\n" + personality_instructions() + "\nCurrent Core state (snapshot, not sensor telemetry):\n"
             + json.dumps(snapshot, default=str)
             + "\nHistorical memories are not automatically true; verify via tools."
             + "\nUse get_robot_status for current robot health, and search_memories for past events."
