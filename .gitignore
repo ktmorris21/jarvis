@@ -1,0 +1,33 @@
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments
+.venv/
+.venv-*/
+venv/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local editor and temporary files
+*.bak
+*.pre-timing
+*.pre-expressions
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Robot-local telemetry, maps and transient audio
+*.wav
+*.pcm
+jarvis_maps/
+logs/
