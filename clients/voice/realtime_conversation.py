@@ -218,17 +218,14 @@ async def main(args):
     global HEAD, CORE_URL, CORE_TOKEN
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
-    # Core owns Jarvis's identity, temperament and current state.
-    # Realtime adds only interface-specific voice delivery behavior.
-    voice_delivery = (
-        "\nVoice interface behavior:\n"
-        "- Speak naturally with restrained pacing. Keep short questions short; "
-        "explain details when asked. Do not narrate stage directions.\n"
-        "- Use a quiet, matter-of-fact delivery rather than exaggerated enthusiasm.\n"
+    # Session mechanics stay in code; vocal delivery is edited on Core.
+    session_rules = (
+        "\nVoice session operating rules:\n"
         "- If the user clearly ends the conversation, call finish_conversation "
         "without another spoken response.\n"
-        "- Request current status through get_robot_status and relevant past "
-        "experiences through search_memories instead of guessing.\n"
+        "- Request live status through get_robot_status and relevant prior "
+        "experiences through search_memories; never guess sensor data.\n"
+        "- Do not narrate stage directions.\n"
     )
 
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
@@ -242,7 +239,8 @@ async def main(args):
             opened = time.monotonic()
             try:
                 context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
-                instructions = context["instructions"] + voice_delivery
+                instructions = (context["instructions"] + "\n\n" +
+                                context["voice_instructions"] + session_rules)
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
                 print("[REALTIME] Credential received from Core.", flush=True)
                 async with websockets.connect(
