@@ -7,6 +7,8 @@ import asyncio
 import json
 import math
 import os
+import subprocess
+from pathlib import Path
 import threading
 import time
 from datetime import datetime, timezone
@@ -58,6 +60,8 @@ class RosStatusNode(Node):
         self.last_map_stamp = None
         self.map_dimensions = None
         self._lock = threading.Lock()
+        self._battery_cache = None
+        self._battery_last_checked = 0.0
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(LaserScan, scan_topic, self._scan_callback, qos_profile_sensor_data)
@@ -78,6 +82,28 @@ class RosStatusNode(Node):
                 "width": msg.info.width, "height": msg.info.height,
                 "resolution_m": round(float(msg.info.resolution), 4),
             }
+
+    def battery_status(self):
+        """Read ADC out of process; do not instantiate PiCarx in this ROS process."""
+        now = time.monotonic()
+        if self._battery_cache is not None and now - self._battery_last_checked < 15:
+            return dict(self._battery_cache)
+        script = Path(__file__).with_name("battery_status.py")
+        try:
+            proc = subprocess.run(
+                ["/usr/bin/python3", str(script)],
+                capture_output=True, text=True, timeout=3, check=True,
+            )
+            result = json.loads(proc.stdout)
+            if not isinstance(result, dict) or "available" not in result:
+                raise ValueError("Malformed battery utility response")
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError) as exc:
+            result = {"available": False, "power_flow": "unknown",
+                      "charging": None, "drawing_from_battery": None,
+                      "error": type(exc).__name__}
+        self._battery_cache = result
+        self._battery_last_checked = now
+        return dict(result)
 
     def status(self, robot_id, scan_stale_after=2.0, map_stale_after=60.0):
         now = time.monotonic()
@@ -116,6 +142,7 @@ class RosStatusNode(Node):
                         "last_map_age_seconds": map_age,
                         "dimensions": dimensions},
             "pose": pose,
+            "battery": self.battery_status(),
         }
 
 
