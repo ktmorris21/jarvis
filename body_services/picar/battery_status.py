@@ -1,8 +1,7 @@
 """Read PiCar-X Robot HAT battery voltage, without initializing PiCarx or motors.
 
 Run with the system Python on the Pi. A4 has an onboard battery-voltage divider.
-Voltage-based charge percent is approximate, especially under load. The ADC does
-not measure current direction; charging/drawing status remains unknown.
+Voltage-based charge percent is approximate, especially under load.
 """
 import json
 from datetime import datetime, timezone
@@ -16,10 +15,6 @@ def read_battery():
         "voltage_v": None,
         "estimated_percent": None,
         "estimate_method": "battery voltage (6.6–8.4 V linear approximation)",
-        "power_flow": "unknown",
-        "charging": None,
-        "drawing_from_battery": None,
-        "power_flow_note": "Battery voltage alone cannot distinguish charging from battery discharge. A charging-status pin or current sensor is required.",
     }
     try:
         # Import only the ADC interface: creating Picarx can reset steering.
