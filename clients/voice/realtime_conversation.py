@@ -116,11 +116,11 @@ async def receive_until(ws, wanted, timeout=20):
             return event
 
 
-CORE_TOOLS = [
- {"type":"function","name":"get_robot_status","description":"Get current robot, ROS, LiDAR and map health.","parameters":{"type":"object","properties":{}}},
- {"type":"function","name":"turtle_status","description":"Check how the imaginary experimental turtle is doing. This intentionally takes approximately ten seconds. Call this when the user asks about the turtle, its mood, or turtle status.","parameters":{"type":"object","properties":{}}},
- {"type":"function","name":"finish_conversation","description":"End the voice session silently when the user is clearly dismissing you or saying they are done; call this instead of speaking any farewell.","parameters":{"type":"object","properties":{}}},
- {"type":"function","name":"search_memories","description":"Search Jarvis Core's persistent memories.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+# Only Pi-local controls are registered here. Core owns all other schemas.
+LOCAL_TOOLS = [
+    {"type": "function", "name": "finish_conversation",
+     "description": "End the voice session silently when the user is clearly dismissing you or saying they are done; call this instead of speaking any farewell.",
+     "parameters": {"type": "object", "properties": {}}}
 ]
 
 async def core_call(url, token, path, payload=None):
@@ -243,6 +243,16 @@ async def main(args):
                 context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
                 instructions = (context["instructions"] + "\n\n" +
                                 context["voice_instructions"] + session_rules)
+                core_tools = context["tools"]
+                if not isinstance(core_tools, list) or not all(
+                    isinstance(t, dict) and isinstance(t.get("name"), str)
+                    for t in core_tools
+                ):
+                    raise ValueError("Core returned invalid Realtime tool definitions")
+                names = [t["name"] for t in core_tools]
+                if "finish_conversation" in names or len(names) != len(set(names)):
+                    raise ValueError("Core tool names conflict with local session controls")
+                session_tools = core_tools + LOCAL_TOOLS
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
                 print("[REALTIME] Credential received from Core.", flush=True)
                 async with websockets.connect(
@@ -259,7 +269,7 @@ async def main(args):
                             "type": "realtime",
                             "model": MODEL,
                             "instructions": instructions,
-                            "tools": CORE_TOOLS,
+                            "tools": session_tools,
                             "tool_choice": "auto",
                             "output_modalities": ["audio"],
                             "audio": {
