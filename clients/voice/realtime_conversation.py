@@ -118,6 +118,7 @@ async def receive_until(ws, wanted, timeout=20):
 
 CORE_TOOLS = [
  {"type":"function","name":"get_robot_status","description":"Get current robot, ROS, LiDAR and map health.","parameters":{"type":"object","properties":{}}},
+ {"type":"function","name":"turtle_status","description":"Check how the imaginary experimental turtle is doing. This intentionally takes approximately ten seconds. Call this when the user asks about the turtle, its mood, or turtle status.","parameters":{"type":"object","properties":{}}},
  {"type":"function","name":"finish_conversation","description":"End the voice session silently when the user is clearly dismissing you or saying they are done; call this instead of speaking any farewell.","parameters":{"type":"object","properties":{}}},
  {"type":"function","name":"search_memories","description":"Search Jarvis Core's persistent memories.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
 ]
