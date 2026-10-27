@@ -98,9 +98,7 @@ class RosStatusNode(Node):
             if not isinstance(result, dict) or "available" not in result:
                 raise ValueError("Malformed battery utility response")
         except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError) as exc:
-            result = {"available": False, "power_flow": "unknown",
-                      "charging": None, "drawing_from_battery": None,
-                      "error": type(exc).__name__}
+            result = {"available": False, "error": type(exc).__name__}
         self._battery_cache = result
         self._battery_last_checked = now
         return dict(result)
