@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Camera-only expressive head controller. Commands on stdin: idle, listening, thinking, speaking, quit."""
+"""Camera-only expressive head controller. Commands on stdin: idle, listening, thinking, speaking, scan_left, scan_center, scan_right, quit."""
 import select
 import sys
 from robot_hat import Servo
@@ -24,7 +24,7 @@ def position(pan_deg=0, tilt_deg=0):
 
 def set_state(new_state):
     global state, nod_index
-    if new_state not in ("idle", "listening", "thinking", "speaking"):
+    if new_state not in ("idle", "listening", "thinking", "speaking", "scan_left", "scan_center", "scan_right"):
         print(f"Unknown expression: {new_state}", flush=True)
         return
     state = new_state
@@ -38,6 +38,12 @@ def set_state(new_state):
         position(0, THINK_TILT)
     elif state == "speaking":
         position(0, 0)
+    elif state == "scan_left":
+        position(-25, 0)
+    elif state == "scan_center":
+        position(0, 0)
+    elif state == "scan_right":
+        position(25, 0)
 
 try:
     set_state("idle")
