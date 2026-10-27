@@ -99,6 +99,29 @@ async def realtime_client_secret(x_jarvis_token: str = Header(default="")):
             "model": "gpt-realtime-2.1-mini"}
 
 
+# One allowlisted registry supplies both the model-facing schemas and the
+# server-side dispatcher. Adding a Core tool requires changing Core only.
+REALTIME_CORE_TOOLS = {
+    "get_robot_status": {
+        "type": "function", "name": "get_robot_status",
+        "description": "Get current robot, ROS, LiDAR and map health.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "turtle_status": {
+        "type": "function", "name": "turtle_status",
+        "description": "Check how the imaginary experimental turtle is doing. This intentionally takes approximately ten seconds. Call this when the user asks about the turtle, its mood, or turtle status.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "search_memories": {
+        "type": "function", "name": "search_memories",
+        "description": "Search Jarvis Core's persistent memories.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Words or question to search for"}
+        }, "required": ["query"], "additionalProperties": False},
+    },
+}
+
+
 @app.get("/realtime/context")
 async def realtime_context(x_jarvis_token: str = Header(default="")):
     """Read-only Core identity and instructions for the experimental voice client."""
@@ -107,7 +130,7 @@ async def realtime_context(x_jarvis_token: str = Header(default="")):
     from .agent_runtime import baseline_context
     from pathlib import Path
     voice_path = Path(__file__).with_name("jarvis_voice.md")
-    return {"instructions": baseline_context(), "voice_instructions": voice_path.read_text(encoding="utf-8").strip()}
+    return {"instructions": baseline_context(), "voice_instructions": voice_path.read_text(encoding="utf-8").strip(), "tools": list(REALTIME_CORE_TOOLS.values())}
 
 
 @app.post("/realtime/tool")
@@ -120,6 +143,8 @@ async def realtime_tool(request: Request, x_jarvis_token: str = Header(default="
     args = payload.get("arguments", {})
     if not isinstance(args, dict):
         raise HTTPException(400, "Tool arguments must be an object")
+    if name not in REALTIME_CORE_TOOLS:
+        raise HTTPException(404, "Unknown or disallowed tool")
     from .agent_runtime import get_robot_status_data, search_memory_data
     if name == "turtle_status":
         if args:
