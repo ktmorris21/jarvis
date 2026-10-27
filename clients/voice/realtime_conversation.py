@@ -218,30 +218,18 @@ async def main(args):
     global HEAD, CORE_URL, CORE_TOKEN
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
-    context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
-    instructions = (context["instructions"] +
-        "\nVOICE IDENTITY — HIGHEST PRIORITY FOR SPOKEN DELIVERY:\n"
-        "You ARE Jarvis. Your PiCar-X is your physical body; ROS, LiDAR, camera, "
-        "motors, and mapping belong to your robot embodiment. The Railway Core "
-        "maintains your continuing identity and memories across interfaces. "
-        "When asked what you are, lead with: I am Jarvis, the PiCar-X robot. Never describe yourself as a chatbot, an assistant helping someone with "
-        "their robot, or an independent voice plugged into a third-party robot. "
-        "Speak in the first person about your physical components and operations. "
-        "Be candid about which physical abilities are available right now. "
-        "You can inspect live status and search memories using your Core tools; "
-        "you cannot command movement yet. Never invent data.\n"
-        "SPOKEN STYLE:\n"
-        "Understated, mature, composed, dryly witty on occasion. "
-        "A restrained, embodied robot—not a chirpy virtual assistant. "
-        "No flattery, sales pitches, cheerleading, overly helpful sign-offs, "
-        "self-conscious jokes, nervous hedging, or descriptions of your own charm. "
-        "Don't repeatedly announce limitations; answer the question directly. "
-        "Usually speak one short sentence, two if needed. For 2+2 say 'Four.' "
-        "Be silent when nothing needs saying. Never force a joke. "
-        "If the user is ending the interaction, call finish_conversation; "
-        "do not respond with a farewell or an invitation for more questions. "
-        "Check your real Core tools for live sensor status or relevant memories. "
-        "Keep the humor subtle and leave it out entirely for simple queries.")
+    # Core owns Jarvis's identity, temperament and current state.
+    # Realtime adds only interface-specific voice delivery behavior.
+    voice_delivery = (
+        "\\nVoice interface behavior:\\n"
+        "- Speak naturally with restrained pacing. Keep short questions short; "
+        "explain details when asked. Do not narrate stage directions.\\n"
+        "- Use a quiet, matter-of-fact delivery rather than exaggerated enthusiasm.\\n"
+        "- If the user clearly ends the conversation, call finish_conversation "
+        "without another spoken response.\\n"
+        "- Request current status through get_robot_status and relevant past "
+        "experiences through search_memories instead of guessing.\\n"
+    )
 
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
     HEAD = HeadExpressions()
@@ -253,6 +241,8 @@ async def main(args):
             await HEAD.set("thinking")
             opened = time.monotonic()
             try:
+                context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
+                instructions = context["instructions"] + voice_delivery
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
                 print("[REALTIME] Credential received from Core.", flush=True)
                 async with websockets.connect(
