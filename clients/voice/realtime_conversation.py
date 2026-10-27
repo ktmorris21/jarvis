@@ -221,14 +221,14 @@ async def main(args):
     # Core owns Jarvis's identity, temperament and current state.
     # Realtime adds only interface-specific voice delivery behavior.
     voice_delivery = (
-        "\\nVoice interface behavior:\\n"
+        "\nVoice interface behavior:\n"
         "- Speak naturally with restrained pacing. Keep short questions short; "
-        "explain details when asked. Do not narrate stage directions.\\n"
-        "- Use a quiet, matter-of-fact delivery rather than exaggerated enthusiasm.\\n"
+        "explain details when asked. Do not narrate stage directions.\n"
+        "- Use a quiet, matter-of-fact delivery rather than exaggerated enthusiasm.\n"
         "- If the user clearly ends the conversation, call finish_conversation "
-        "without another spoken response.\\n"
+        "without another spoken response.\n"
         "- Request current status through get_robot_status and relevant past "
-        "experiences through search_memories instead of guessing.\\n"
+        "experiences through search_memories instead of guessing.\n"
     )
 
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
