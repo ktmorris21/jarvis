@@ -121,6 +121,11 @@ async def realtime_tool(request: Request, x_jarvis_token: str = Header(default="
     if not isinstance(args, dict):
         raise HTTPException(400, "Tool arguments must be an object")
     from .agent_runtime import get_robot_status_data, search_memory_data
+    if name == "turtle_status":
+        if args:
+            raise HTTPException(400, "turtle_status takes no arguments")
+        await asyncio.sleep(10)
+        return {"status": "The turtle is happy.", "delay_seconds": 10}
     if name == "get_robot_status":
         if args:
             raise HTTPException(400, "get_robot_status takes no arguments")
