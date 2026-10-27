@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Jarvis Realtime Sprint 2: wake-word session, follow-ups, silent dismissal.
+"""Jarvis primary Realtime voice: wake word, follow-ups, and silent dismissal.
 
-Standalone experimental client; never run alongside jarvis-voice.service.
-Core identity, read-only tools, and short-lived Realtime authentication are integrated.
+Run under jarvis-realtime.service on the Pi; never run alongside the
+legacy jarvis-voice.service or a second microphone-owning voice process.
+Core supplies identity, tools, and short-lived OpenAI credentials.
 """
 import argparse
 import asyncio
