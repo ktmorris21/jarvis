@@ -19,6 +19,7 @@ import numpy as np
 import websockets
 
 from openwakeword.model import Model
+from environment_camera import capture_environment
 from realtime_poc import (DEVICE, MODEL, REALTIME_URL, SAMPLE_RATE,
                           convert_wav_to_pcm24)
 from voice_interface import (CHUNK, RATE, HeadExpressions, listen_for_command,
@@ -123,8 +124,8 @@ LOCAL_TOOLS = [
      "parameters": {"type": "object", "properties": {}}}
 ]
 
-async def core_call(url, token, path, payload=None):
-    async with httpx.AsyncClient(timeout=25) as client:
+async def core_call(url, token, path, payload=None, timeout=25):
+    async with httpx.AsyncClient(timeout=timeout) as client:
         if payload is None:
             response = await client.get(url.rstrip("/") + path, headers={"X-Jarvis-Token":token})
         else:
@@ -183,8 +184,12 @@ async def speak_turn(ws, head):
                 return False
             try:
                 arguments = json.loads(call.get("arguments") or "{}")
+                if call["name"] == "inspect_environment":
+                    print("[REALTIME] Capturing three camera views...", flush=True)
+                    arguments["_capture_images"] = await capture_environment(head)
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
-                                         {"name": call["name"], "arguments": arguments})
+                                         {"name": call["name"], "arguments": arguments},
+                                         timeout=90 if call["name"] == "inspect_environment" else 25)
                 output = json.dumps(result)
             except Exception as exc:
                 output = json.dumps({"error": "Core tool failed: " + type(exc).__name__})
