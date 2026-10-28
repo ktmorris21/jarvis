@@ -34,8 +34,13 @@ def baseline_context() -> str:
     }
     # The SDK session already holds desktop history; add recent voice dialogue
     # so desktop can resolve references from PiCar conversations as well.
-    voice_turns = [t for t in repository.recent_conversation_turns(limit=16, hours=24)
-                   if t.get("source") == "picar:realtime"][-12:]
+    try:
+        voice_turns = [t for t in repository.recent_conversation_turns(limit=32, hours=24)
+                       if t.get("source") == "picar:realtime"][-12:]
+    except Exception:
+        # Conversation context is helpful, but must never prevent Core answering.
+        log.exception("Could not load recent voice context")
+        voice_turns = []
     voice_context = json.dumps([{"role": t["role"], "text": t["text"][:900],
                                  "at": t["at"]} for t in voice_turns],
                                 ensure_ascii=False)[:4000]
