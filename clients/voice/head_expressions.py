@@ -17,7 +17,7 @@ state = "idle"
 nod_index = 0
 
 def position(pan_deg=0, tilt_deg=0):
-    pan_deg = max(-25, min(25, pan_deg))
+    pan_deg = max(-45, min(45, pan_deg))
     tilt_deg = max(-25, min(25, tilt_deg))
     pan.angle(PAN_CALIBRATION - pan_deg)
     tilt.angle(TILT_CALIBRATION - tilt_deg)
@@ -39,11 +39,11 @@ def set_state(new_state):
     elif state == "speaking":
         position(0, 0)
     elif state == "scan_left":
-        position(-25, 0)
+        position(-45, 0)
     elif state == "scan_center":
         position(0, 0)
     elif state == "scan_right":
-        position(25, 0)
+        position(45, 0)
 
 try:
     set_state("idle")
