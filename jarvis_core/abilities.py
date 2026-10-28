@@ -4,6 +4,38 @@ from fastapi import HTTPException
 from .config import settings
 
 CORE_TOOLS = {
+    "get_audio_levels": {
+        "type": "function", "name": "get_audio_levels",
+        "description": "Read Jarvis Pi speaker output and microphone capture gain settings, in percent.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "set_audio_level": {
+        "type": "function", "name": "set_audio_level",
+        "description": "Set Jarvis Pi speaker playback volume or microphone capture gain. Use a precise 0-100 percent value. Never change unless the user asks.",
+        "parameters": {"type": "object", "properties": {
+            "device": {"type": "string", "enum": ["speaker", "microphone"]},
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100},
+        }, "required": ["device", "percent"], "additionalProperties": False},
+    },
+    "get_lidar_service": {
+        "type": "function", "name": "get_lidar_service",
+        "description": "Read running state of Jarvis's ROS mapping systemd service (which includes the LiDAR driver). This does not prove LiDAR scan freshness.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "set_lidar_service": {
+        "type": "function", "name": "set_lidar_service",
+        "description": "Start or stop the Pi's ROS mapping stack, INCLUDING the LiDAR driver. This stops mapping/localization as well as LiDAR; only do so when explicitly requested by the user.",
+        "parameters": {"type": "object", "properties": {
+            "running": {"type": "boolean"},
+        }, "required": ["running"], "additionalProperties": False},
+    },
+    "reboot_pi": {
+        "type": "function", "name": "reboot_pi",
+        "description": "Reboot the Jarvis Raspberry Pi. WARNING: disrupts all robot services and conversation. Use ONLY after user explicitly confirms reboot NOW. Requires local administrator enablement. Pass exact confirmation phrase REBOOT JARVIS NOW.",
+        "parameters": {"type": "object", "properties": {
+            "confirmation": {"type": "string", "enum": ["REBOOT JARVIS NOW"]},
+        }, "required": ["confirmation"], "additionalProperties": False},
+    },
     "get_robot_status": {
         "type": "function", "name": "get_robot_status",
         "description": "Get current robot, ROS, LiDAR and map health.",
@@ -42,6 +74,27 @@ async def execute_tool(name: str, args: dict):
     if not isinstance(args, dict):
         raise HTTPException(400, "Tool arguments must be an object")
     from .agent_runtime import get_robot_status_data, search_memory_data
+    if name in {"get_audio_levels", "set_audio_level", "get_lidar_service",
+                "set_lidar_service", "reboot_pi"}:
+        # Exact argument validation applies for both Agents SDK and Realtime.
+        if name in {"get_audio_levels", "get_lidar_service"} and args:
+            raise HTTPException(400, "This tool accepts no arguments")
+        if name == "set_audio_level":
+            if (set(args) != {"device", "percent"}
+                    or args["device"] not in {"speaker", "microphone"}
+                    or type(args["percent"]) is not int
+                    or not 0 <= args["percent"] <= 100):
+                raise HTTPException(400, "Expected valid device and integer percent 0-100")
+        if name == "set_lidar_service" and (
+                set(args) != {"running"} or type(args["running"]) is not bool):
+            raise HTTPException(400, "Expected boolean running")
+        if name == "reboot_pi" and (
+                set(args) != {"confirmation"}
+                or args["confirmation"] != "REBOOT JARVIS NOW"):
+            raise HTTPException(400, "Explicit reboot confirmation required")
+        from .agent_runtime import pi_control_data
+        return await pi_control_data(name, args)
+
     if name == "inspect_environment" and not args.get("_capture_images"):
         return {"available": False, "reason":
                 "Fresh camera capture is unavailable from this interface; "

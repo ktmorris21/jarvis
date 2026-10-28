@@ -21,6 +21,7 @@ import websockets
 
 from openwakeword.model import Model
 from environment_camera import capture_environment
+from boot_notice import BOOT_GREETING, needs_boot_announcement, mark_boot_announced
 from realtime_poc import (DEVICE, MODEL, REALTIME_URL, SAMPLE_RATE,
                           convert_wav_to_pcm24)
 from voice_interface import (CHUNK, RATE, HeadExpressions, listen_for_command,
@@ -260,7 +261,9 @@ async def speak_turn(ws, head):
                     arguments["_capture_images"] = await capture_environment(head)
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
                                          {"name": call["name"], "arguments": arguments},
-                                         timeout=90 if call["name"] == "inspect_environment" else 25)
+                                         timeout=(90 if call["name"] == "inspect_environment" else
+                                                  45 if call["name"] in {"set_lidar_service", "reboot_pi"}
+                                                  else 25))
                 output = json.dumps(result)
             except Exception as exc:
                 output = json.dumps({"error": "Core tool failed: " + type(exc).__name__})
@@ -293,6 +296,89 @@ async def send_turn(ws, wav):
     return await speak_turn(ws, HEAD)
 
 
+# A boot announcement is not a conversation: no user input,
+# no tools, no transcript persistence and no follow-up listening window.
+async def speak_boot_announcement(head, core_url, core_token):
+    """Produce one isolated, no-follow-up Realtime speech response."""
+    boot_id = needs_boot_announcement()
+    if boot_id is None:
+        print("[REALTIME] Boot greeting already played for this boot", flush=True)
+        return
+
+    credential = await core_call(core_url, core_token, "/realtime/client-secret", {})
+    proc = None
+    played_bytes = 0
+    await head.set("speaking")
+    try:
+        async with websockets.connect(
+            REALTIME_URL,
+            additional_headers={"Authorization": "Bearer " + credential["value"]},
+            max_size=16 * 1024 * 1024,
+            open_timeout=15,
+        ) as ws:
+            await ws.send(json.dumps({
+                "type": "session.update",
+                "session": {
+                    "type": "realtime", "model": MODEL,
+                    "instructions": (
+                        "You are Jarvis. This is an automatic boot-ready notice, "
+                        "not an interactive conversation. Speak exactly: "
+                        + BOOT_GREETING
+                        + " Do not ask a question or invite a response."
+                    ),
+                    "tools": [],
+                    "output_modalities": ["audio"],
+                    "audio": {"output": {
+                        "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
+                        "voice": "ash",
+                    }},
+                },
+            }))
+            await receive_until(ws, "session.updated", timeout=15)
+            await ws.send(json.dumps({
+                "type": "response.create",
+                "response": {"instructions": (
+                    "Say only: " + BOOT_GREETING + " Then stop speaking."
+                )},
+            }))
+            completed = False
+            while True:
+                event = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
+                kind = event.get("type")
+                if kind == "error":
+                    raise RuntimeError(str(event.get("error")))
+                if kind == "response.output_audio.delta":
+                    if proc is None:
+                        proc = await asyncio.create_subprocess_exec(
+                            "aplay", "-q", "-D", DEVICE, "-t", "raw",
+                            "-f", "S16_LE", "-r", str(SAMPLE_RATE),
+                            "-c", "1", stdin=asyncio.subprocess.PIPE,
+                        )
+                    block = base64.b64decode(event["delta"])
+                    played_bytes += len(block)
+                    proc.stdin.write(block)
+                    await proc.stdin.drain()
+                elif kind == "response.done":
+                    completed = event.get("response", {}).get("status") == "completed"
+                    break
+
+            if not completed or not played_bytes:
+                raise RuntimeError("Boot greeting produced no completed audio")
+        if proc is None:
+            raise RuntimeError("Boot greeting audio process did not start")
+        proc.stdin.close()
+        await asyncio.wait_for(proc.wait(), timeout=30)
+        if proc.returncode != 0:
+            raise RuntimeError("Boot greeting audio playback failed")
+        mark_boot_announced(boot_id)
+        print("[REALTIME] Boot greeting played; voice ready", flush=True)
+    finally:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        await head.set("idle")
+
+
 async def main(args):
     global HEAD, CORE_URL, CORE_TOKEN, SESSION_ID
     CORE_URL = args.core_url
@@ -311,6 +397,11 @@ async def main(args):
     HEAD = HeadExpressions()
     await HEAD.start()
     try:
+        # No wake word is needed for this one-time boot readiness notice.
+        try:
+            await speak_boot_announcement(HEAD, CORE_URL, CORE_TOKEN)
+        except Exception as exc:
+            print("[REALTIME] Boot greeting unavailable:", repr(exc), flush=True)
         while True:
             await HEAD.set("idle")
             initial_wav = await listen_for_command(wake, HEAD)

@@ -63,7 +63,7 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
         state.last_command_result=event.data; cid=event.data.get("command_id");
         if cid: repository.complete_action_by_command(cid,event.data)
         from .agent_runtime import deliver_status_result
-        if source == "picar-ros":
+        if source in ("picar-ros", "picar-control"):
             deliver_status_result(event.data)
         # ROS status is operational world state, not long-term memory.
         connection = state.interfaces.get(source)

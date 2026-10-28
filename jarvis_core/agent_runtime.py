@@ -86,6 +86,30 @@ async def get_robot_status_data() -> dict:
         _pending_status.pop(command.command_id, None)
 
 
+async def pi_control_data(ability: str, data: dict) -> dict:
+    """Route an allowlisted Pi operation through Core's authenticated command bus."""
+    from .executive import send_command
+    from .models import Command
+
+    command = Command(target="picar-control", ability=ability, data=data)
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    _pending_status[command.command_id] = future
+    try:
+        sent, route = await send_command(command)
+        if not sent:
+            return {"available": False, "reason": route}
+        try:
+            event = await asyncio.wait_for(future, timeout=35)
+        except asyncio.TimeoutError:
+            return {"available": False, "reason": "Pi control command timed out"}
+        if event.get("status") != "complete" or not isinstance(event.get("result"), dict):
+            return {"available": False, "reason": event.get("error") or "Pi operation failed"}
+        return {"available": True, **event["result"]}
+    finally:
+        _pending_status.pop(command.command_id, None)
+
+
 def search_memory_data(query: str) -> list[dict]:
     results = memory.retrieve(query[:500], limit=5)
     return [{"id": m["id"], "type": m["memory_type"], "content": m["content"],
