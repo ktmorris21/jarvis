@@ -259,6 +259,8 @@ async def speak_turn(ws, head):
                 if call["name"] == "inspect_environment":
                     print("[REALTIME] Capturing three camera views...", flush=True)
                     arguments["_capture_images"] = await capture_environment(head)
+                if call["name"] == "reboot_pi":
+                    raise PermissionError("Reboot cannot be initiated from Realtime voice")
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
                                          {"name": call["name"], "arguments": arguments},
                                          timeout=(90 if call["name"] == "inspect_environment" else
@@ -432,6 +434,10 @@ async def main(args):
                 names = [t["name"] for t in core_tools]
                 if "finish_conversation" in names or len(names) != len(set(names)):
                     raise ValueError("Core tool names conflict with local session controls")
+                # Reboot is intentionally unavailable to Realtime. A model-generated
+                # confirmation string is NOT proof the user requested a reboot.
+                # Retain other Core tools, including LiDAR and audio controls.
+                core_tools = [t for t in core_tools if t["name"] != "reboot_pi"]
                 session_tools = core_tools + LOCAL_TOOLS
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
                 print("[REALTIME] Credential received from Core.", flush=True)
