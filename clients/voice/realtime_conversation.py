@@ -257,7 +257,7 @@ async def speak_turn(ws, head):
             try:
                 arguments = json.loads(call.get("arguments") or "{}")
                 if call["name"] == "inspect_environment":
-                    print("[REALTIME] Capturing three camera views...", flush=True)
+                    print("[REALTIME] Capturing two camera views at ±45 degrees...", flush=True)
                     arguments["_capture_images"] = await capture_environment(head)
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
                                          {"name": call["name"], "arguments": arguments},
