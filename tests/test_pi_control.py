@@ -95,3 +95,62 @@ def test_core_routes_pi_command_and_waits_for_result(monkeypatch):
     assert result["available"] is True
     assert result["speaker"]["percent"] == 45
     assert not agent_runtime._pending_status
+
+
+def test_drive_tool_validation_before_dispatch(monkeypatch):
+    from jarvis_core import agent_runtime
+    calls = []
+    async def fake_control(name, data):
+        calls.append((name, data))
+        return {"available": True}
+    monkeypatch.setattr(agent_runtime, "pi_control_data", fake_control)
+    for invalid in [
+        {"direction": "spin", "duration_seconds": 2},
+        {"direction": "forward", "duration_seconds": 6},
+        {"direction": "forward", "duration_seconds": True},
+        {"direction": "left", "duration_seconds": float("nan")},
+    ]:
+        with pytest.raises(Exception):
+            run(abilities.execute_tool("drive_timed", invalid))
+    assert calls == []
+    assert run(abilities.execute_tool("drive_timed", {
+        "direction": "right", "duration_seconds": 1.5
+    }))["available"]
+    assert calls == [("drive_timed", {"direction": "right", "duration_seconds": 1.5})]
+
+
+def test_pi_motion_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("JARVIS_ENABLE_MOTION", raising=False)
+    with pytest.raises(RuntimeError, match="Motion disabled"):
+        run(bridge.timed_motion({"direction": "forward", "duration_seconds": 0.1}))
+
+
+def test_pi_motion_stops_on_completion_and_cancel(monkeypatch):
+    class FakeHardware:
+        def __init__(self):
+            self.actions = []
+        def set_steering(self, angle):
+            self.actions.append(("steer", angle))
+        def drive(self, direction, speed):
+            self.actions.append(("drive", direction, speed))
+        def stop(self):
+            self.actions.append(("stop",))
+    hw = FakeHardware()
+    monkeypatch.setattr(bridge, "_motor", lambda: hw)
+    monkeypatch.setattr(bridge, "_motion_hardware", hw)
+    result = run(bridge.timed_motion({"direction": "left", "duration_seconds": 0.1}))
+    assert result["stopped"]
+    assert hw.actions[:2] == [("steer", -25), ("drive", "forward", 20)]
+    assert hw.actions[-1] == ("stop",)
+
+    async def cancel_in_flight():
+        task = asyncio.create_task(bridge.timed_motion({
+            "direction": "forward", "duration_seconds": 5
+        }))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    run(cancel_in_flight())
+    assert hw.actions[-1] == ("stop",)
+    monkeypatch.setattr(bridge, "_motion_hardware", None)
