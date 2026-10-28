@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+from uuid import uuid4
 
 import numpy as np
 import websockets
@@ -134,12 +135,29 @@ async def core_call(url, token, path, payload=None, timeout=25):
         return response.json()
 
 
+async def capture_transcript(role, transcript):
+    """Best-effort durable Core capture; never interrupt the spoken exchange."""
+    text = (transcript or "").strip()
+    if not text:
+        return
+    try:
+        await core_call(CORE_URL, CORE_TOKEN, "/realtime/transcript", {
+            "session_id": SESSION_ID,
+            "turn_id": uuid4().hex,
+            "role": role,
+            "text": text[:12000],
+        }, timeout=8)
+    except Exception as exc:
+        print("[REALTIME] Transcript persistence failed:", repr(exc), flush=True)
+
+
 async def speak_turn(ws, head):
     first = True
     audio_proc = None
     started_at = time.monotonic()
     await ws.send(json.dumps({"type": "response.create"}))
     calls = []
+    spoken_transcript = ""
     try:
         while True:
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
@@ -160,6 +178,7 @@ async def speak_turn(ws, head):
                 audio_proc.stdin.write(base64.b64decode(event["delta"]))
                 await audio_proc.stdin.drain()
             elif kind == "response.output_audio_transcript.done":
+                spoken_transcript += event.get("transcript", "") or ""
                 print("[REALTIME] Jarvis:", event.get("transcript", ""), flush=True)
             elif kind == "response.done":
                 calls = [item for item in event.get("response", {}).get("output", []) if item.get("type") == "function_call"]
@@ -177,6 +196,7 @@ async def speak_turn(ws, head):
                     audio_proc.kill()
                     await audio_proc.wait()
         await head.set("idle")
+    await capture_transcript("assistant", spoken_transcript)
     if calls:
         for call in calls:
             if call.get("name") == "finish_conversation":
@@ -215,6 +235,7 @@ async def send_turn(ws, wav):
     event = await receive_until(ws, "conversation.item.input_audio_transcription.completed", timeout=20)
     transcript = event.get("transcript", "")
     print("[REALTIME] Heard:", transcript, flush=True)
+    await capture_transcript("user", transcript)
     if is_dismissal(transcript):
         print("[REALTIME] Dismissed: close silently.", flush=True)
         return False
@@ -222,7 +243,7 @@ async def send_turn(ws, wav):
 
 
 async def main(args):
-    global HEAD, CORE_URL, CORE_TOKEN
+    global HEAD, CORE_URL, CORE_TOKEN, SESSION_ID
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
     # Session mechanics stay in code; vocal delivery is edited on Core.
@@ -244,6 +265,7 @@ async def main(args):
             initial_wav = await listen_for_command(wake, HEAD)
             await HEAD.set("thinking")
             opened = time.monotonic()
+            SESSION_ID = uuid4().hex
             try:
                 context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
                 instructions = (context["instructions"] + "\n\n" +

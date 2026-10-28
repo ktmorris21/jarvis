@@ -1,11 +1,12 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Query,Request,WebSocket,WebSocketDisconnect,WebSocketException,status
 from pydantic import ValidationError
 from .config import settings
 from .executive import executive_loop,handle_event,send_command
-from .models import Command,DebugCommandRequest,GoalCreateRequest,InterfaceEvent,InterfaceHello,MemoryCreateRequest,MemorySearchRequest
+from .models import Command,DebugCommandRequest,GoalCreateRequest,InterfaceEvent,InterfaceHello,MemoryCreateRequest,MemorySearchRequest,ConversationTranscriptRequest
 from .persistence import init_db
 from .persistence.repository import repository
 from .state import InterfaceConnection,state
@@ -60,6 +61,29 @@ async def debug_command(req:DebugCommandRequest,x_jarvis_token:str=Header(defaul
     cmd=Command(target=req.target,ability=req.ability,data=req.data); sent,route=await send_command(cmd)
     if not sent: raise HTTPException(409,route)
     return {"status":"sent","command_id":cmd.command_id,"target":route,"ability":cmd.ability}
+
+@app.post("/realtime/transcript")
+async def capture_realtime_transcript(
+    req: ConversationTranscriptRequest,
+    x_jarvis_token: str = Header(default=""),
+):
+    """Persist voice turns without invoking the Agents SDK a second time.
+
+    These are source conversation records, not curated episodic memories.
+    """
+    if not settings.interface_token or settings.interface_token == "change-me":
+        raise HTTPException(503, "Core interface authentication is not configured")
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    event_id = repository.record_event(
+        event_type="CONVERSATION_TURN", source="picar:realtime",
+        occurred_at=datetime.now(timezone.utc),
+        data={"session_id": req.session_id, "turn_id": req.turn_id,
+              "role": req.role, "text": req.text, "input_mode": "realtime_voice"},
+        importance=0.6 if req.role == "user" else 0.4,
+    )
+    return {"stored": True, "event_id": event_id}
+
 
 @app.post("/realtime/client-secret")
 async def realtime_client_secret(x_jarvis_token: str = Header(default="")):

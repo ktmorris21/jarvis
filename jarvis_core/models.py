@@ -47,3 +47,11 @@ class GoalCreateRequest(BaseModel):
     priority: int = Field(default=50, ge=0, le=100)
     event_subscriptions: list[str] = Field(default_factory=list)
     data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationTranscriptRequest(BaseModel):
+    """A completed transcript turn from an authenticated voice interface."""
+    session_id: str = Field(min_length=1, max_length=100)
+    turn_id: str = Field(min_length=1, max_length=100)
+    role: str = Field(pattern="^(user|assistant)$")
+    text: str = Field(min_length=1, max_length=12000)
