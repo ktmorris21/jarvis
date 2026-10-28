@@ -478,9 +478,11 @@ async def main(args):
         while True:
             await HEAD.set("idle")
             prep_task = None
+            wake_detected_at = None
 
             def on_wake():
-                nonlocal prep_task
+                nonlocal prep_task, wake_detected_at
+                wake_detected_at = time.monotonic()
                 prep_task = asyncio.create_task(prepare_voice_session())
 
             opened = time.monotonic()
@@ -489,10 +491,11 @@ async def main(args):
                 initial_wav = await listen_for_command(wake, HEAD, on_wake=on_wake)
                 await HEAD.set("thinking")
                 SESSION_ID = uuid4().hex
+                opened = time.monotonic()
                 if prep_task is None:
                     raise RuntimeError("Wake word did not start Realtime preparation")
                 ws = await prep_task
-                timing("Wake-to-session-ready", opened)
+                timing("Wake-to-session-ready", wake_detected_at)
                 print("[REALTIME] Credential received from Core.", flush=True)
                 # Core owns past dialogue; Realtime is speech-only.
                 current = initial_wav
