@@ -121,10 +121,23 @@ async def receive_until(ws, wanted, timeout=20):
 
 # Only Pi-local controls are registered here. Core owns all other schemas.
 LOCAL_TOOLS = [
+    {"type": "function", "name": "request_reboot_confirmation",
+     "description": "When the user asks to reboot your Raspberry Pi, request a separate spoken confirmation. This tool NEVER reboots the Pi. Explain that the user must say Yes, reboot now in their next utterance.",
+     "parameters": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"type": "function", "name": "finish_conversation",
      "description": "End the voice session silently when the user is clearly dismissing you or saying they are done; call this instead of speaking any farewell.",
      "parameters": {"type": "object", "properties": {}}}
 ]
+
+# Confirmation is verified against a fresh STT transcript, never model tool arguments.
+REBOOT_CONFIRM_TIMEOUT = 35.0
+REBOOT_CONFIRM_PHRASES = {"yes reboot now", "confirm reboot", "reboot jarvis now"}
+
+
+def normalized_spoken_text(text):
+    return re.sub(r"\\s+", " ", re.sub(r"[^a-z0-9 ]", " ",
+                  text.lower().replace("’", "'"))).strip()
+
 
 async def core_call(url, token, path, payload=None, timeout=25):
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -251,6 +264,15 @@ async def speak_turn(ws, head):
     await capture_transcript("assistant", spoken_transcript)
     if calls:
         for call in calls:
+            if call.get("name") == "request_reboot_confirmation":
+                global REBOOT_PENDING_UNTIL
+                REBOOT_PENDING_UNTIL = time.monotonic() + REBOOT_CONFIRM_TIMEOUT
+                print("[REALTIME] Reboot confirmation armed for next utterance.", flush=True)
+                await ws.send(json.dumps({"type": "conversation.item.create",
+                                          "item": {"type": "function_call_output",
+                                                   "call_id": call["call_id"],
+                                                   "output": json.dumps({"status": "confirmation_required", "say": "Yes, reboot now", "reboot_executed": False})}}))
+                continue
             if call.get("name") == "finish_conversation":
                 print("[REALTIME] Dismissal requested by model.", flush=True)
                 return False
@@ -295,6 +317,24 @@ async def send_turn(ws, wav):
     if is_dismissal(transcript):
         print("[REALTIME] Dismissed: close silently.", flush=True)
         return False
+    global REBOOT_PENDING_UNTIL
+    if REBOOT_PENDING_UNTIL:
+        deadline = REBOOT_PENDING_UNTIL
+        REBOOT_PENDING_UNTIL = 0.0
+        normalized = normalized_spoken_text(transcript)
+        if time.monotonic() <= deadline and normalized in REBOOT_CONFIRM_PHRASES:
+            print("[REALTIME] Reboot confirmed by separate spoken transcript.", flush=True)
+            try:
+                result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
+                                         {"name": "reboot_pi",
+                                          "arguments": {"confirmation": "REBOOT JARVIS NOW"}},
+                                         timeout=20)
+                print("[REALTIME] Reboot result:", result, flush=True)
+            except Exception as exc:
+                print("[REALTIME] Reboot dispatch failed:", repr(exc), flush=True)
+                # The administrator switch or backend may be unavailable.
+            return False
+        print("[REALTIME] Reboot confirmation expired or rejected; no reboot.", flush=True)
     return await speak_turn(ws, HEAD)
 
 
@@ -383,6 +423,8 @@ async def speak_boot_announcement(head, core_url, core_token):
 
 async def main(args):
     global HEAD, CORE_URL, CORE_TOKEN, SESSION_ID
+    global REBOOT_PENDING_UNTIL
+    REBOOT_PENDING_UNTIL = 0.0
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
     # Session mechanics stay in code; vocal delivery is edited on Core.
@@ -409,6 +451,7 @@ async def main(args):
             initial_wav = await listen_for_command(wake, HEAD)
             await HEAD.set("thinking")
             opened = time.monotonic()
+            REBOOT_PENDING_UNTIL = 0.0
             SESSION_ID = uuid4().hex
             try:
                 context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
@@ -434,7 +477,7 @@ async def main(args):
                 names = [t["name"] for t in core_tools]
                 if "finish_conversation" in names or len(names) != len(set(names)):
                     raise ValueError("Core tool names conflict with local session controls")
-                # Reboot is intentionally unavailable to Realtime. A model-generated
+                # Reboot execution remains unavailable to Realtime. A model-generated
                 # confirmation string is NOT proof the user requested a reboot.
                 # Retain other Core tools, including LiDAR and audio controls.
                 core_tools = [t for t in core_tools if t["name"] != "reboot_pi"]
