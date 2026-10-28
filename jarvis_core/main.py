@@ -175,9 +175,7 @@ async def realtime_delegate(request: Request, x_jarvis_token: str = Header(defau
         logging.getLogger(__name__).exception("Realtime Core delegation failed")
         raise HTTPException(503, "Jarvis Core reasoning unavailable")
     finally:
-        import logging
-        logging.getLogger(__name__).info("[CORE TIMING] /realtime/delegate total: %.3fs",
-                                         time.perf_counter() - started)
+        print(f"[CORE TIMING] /realtime/delegate total: {time.perf_counter() - started:.3f}s", flush=True)
     return {"spoken_response": reply, "source": "jarvis_core"}
 
 
