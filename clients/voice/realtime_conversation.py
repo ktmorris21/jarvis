@@ -14,7 +14,6 @@ import json
 import os
 import re
 import time
-from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
@@ -22,6 +21,7 @@ import websockets
 
 from openwakeword.model import Model
 from environment_camera import capture_environment
+from boot_notice import BOOT_GREETING, needs_boot_announcement, mark_boot_announced
 from realtime_poc import (DEVICE, MODEL, REALTIME_URL, SAMPLE_RATE,
                           convert_wav_to_pcm24)
 from voice_interface import (CHUNK, RATE, HeadExpressions, listen_for_command,
@@ -296,25 +296,8 @@ async def send_turn(ws, wav):
     return await speak_turn(ws, HEAD)
 
 
-# A boot announcement is deliberately not a conversation: no user input,
+# A boot announcement is not a conversation: no user input,
 # no tools, no transcript persistence and no follow-up listening window.
-BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
-BOOT_ANNOUNCED_FILE = Path("/tmp/jarvis-realtime-announced-boot-id")
-BOOT_GREETING = "Jarvis online and ready."
-
-
-def needs_boot_announcement():
-    """Only advertise readiness once per physical Pi boot."""
-    boot_id = BOOT_ID_FILE.read_text(encoding="ascii").strip()
-    if not boot_id:
-        raise RuntimeError("Kernel boot ID is unavailable")
-    try:
-        announced = BOOT_ANNOUNCED_FILE.read_text(encoding="ascii").strip()
-    except FileNotFoundError:
-        announced = None
-    return boot_id if announced != boot_id else None
-
-
 async def speak_boot_announcement(head, core_url, core_token):
     """Produce one isolated, no-follow-up Realtime speech response."""
     boot_id = needs_boot_announcement()
@@ -387,7 +370,7 @@ async def speak_boot_announcement(head, core_url, core_token):
         await asyncio.wait_for(proc.wait(), timeout=30)
         if proc.returncode != 0:
             raise RuntimeError("Boot greeting audio playback failed")
-        BOOT_ANNOUNCED_FILE.write_text(boot_id + "\n", encoding="ascii")
+        mark_boot_announced(boot_id)
         print("[REALTIME] Boot greeting played; voice ready", flush=True)
     finally:
         if proc is not None and proc.returncode is None:
