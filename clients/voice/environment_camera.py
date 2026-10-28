@@ -14,6 +14,8 @@ async def capture_environment(head):
     camera = shutil.which("rpicam-still") or shutil.which("libcamera-still")
     v4l2_device = int(os.getenv("JARVIS_CAMERA_DEVICE", "0"))
     fallback = Path(__file__).with_name("capture_v4l2.py")
+    isolated = Path(__file__).with_name("capture_libcamera.py")
+    isolated_cam = Path(os.getenv("JARVIS_LIBCAMERA_SOURCE", "/home/shadowfax/src/libcamera-0.3")) / "build/src/apps/cam/cam"
     images = []
     try:
         for label, state in (("left", "scan_left"), ("center", "scan_center"),
@@ -22,7 +24,9 @@ async def capture_environment(head):
                 raise RuntimeError("Camera head controller unavailable")
             await head.set(state)
             await asyncio.sleep(0.65)  # allow servo and camera to settle
-            if camera:
+            if isolated_cam.is_file():
+                command = ["/usr/bin/python3", str(isolated)]
+            elif camera:
                 command = [camera, "--nopreview", "--timeout", "750",
                            "--width", "1280", "--height", "960",
                            "--encoding", "jpg", "--quality", "80", "--output", "-"]
@@ -34,7 +38,7 @@ async def capture_environment(head):
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                raw, stderr = await asyncio.wait_for(proc.communicate(), timeout=12)
+                raw, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.communicate()
