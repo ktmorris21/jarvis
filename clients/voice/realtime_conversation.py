@@ -434,6 +434,9 @@ async def main(args):
         "without another spoken response.\n"
         "- Request live status through get_robot_status and relevant prior "
         "experiences through search_memories; never guess sensor data.\n"
+        "- If explicitly asked to reboot your Pi, call request_reboot_confirmation; "
+        "do not claim reboot is impossible. A separate spoken confirmation is "
+        "verified locally, never by your tool arguments.\n"
         "- Do not narrate stage directions.\n"
     )
 
