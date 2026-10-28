@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import desc, select
 from .db import SessionLocal
 from .tables import ActionRow, EntityStateRow, EventRow, GoalRow, InterfaceRow, MemoryRow
@@ -13,6 +13,27 @@ class Repository:
         with SessionLocal() as s:
             rows=s.scalars(select(EventRow).order_by(desc(EventRow.received_at)).limit(limit)).all()
             return [{"id":r.id,"type":r.type,"source":r.source,"occurred_at":r.occurred_at.isoformat(),"data":r.data,"importance":r.importance} for r in reversed(rows)]
+    def recent_conversation_turns(self, limit=12, hours=24):
+        """Retrieve bounded recent Realtime dialogue, independent of sensor-event volume."""
+        cutoff = utc_now() - timedelta(hours=hours)
+        with SessionLocal() as s:
+            stmt = (select(EventRow)
+                    .where(EventRow.type == "CONVERSATION_TURN",
+                           EventRow.source == "picar:realtime",
+                           EventRow.received_at >= cutoff)
+                    .order_by(desc(EventRow.received_at))
+                    .limit(limit))
+            rows = s.scalars(stmt).all()
+            return [
+                {"session_id": (r.data or {}).get("session_id", ""),
+                 "role": (r.data or {}).get("role", ""),
+                 "text": (r.data or {}).get("text", ""),
+                 "at": r.received_at.isoformat()}
+                for r in reversed(rows)
+                if (r.data or {}).get("role") in {"user", "assistant"}
+                   and isinstance((r.data or {}).get("text"), str)
+            ]
+
     def upsert_state(self, entity_id, entity_type, state):
         now=utc_now()
         with SessionLocal() as s:
