@@ -48,7 +48,7 @@ CORE_TOOLS = {
     },
     "inspect_environment": {
         "type": "function", "name": "inspect_environment",
-        "description": "Use my onboard camera to inspect what I currently see. Choose this for questions about visible objects, scenes, signs, text or visual surroundings; requires taking new photos.",
+        "description": "Use my onboard camera to inspect what I currently see. Choose this for questions about visible objects, scenes, signs, text or visual surroundings; requires taking two new photos at 45 degrees left/right.",
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "Specific visual question to answer from new photographs"}
         }, "required": ["question"], "additionalProperties": False},
@@ -104,13 +104,13 @@ async def execute_tool(name: str, args: dict):
         photos = args.get("_capture_images")
         if not isinstance(question, str) or not 1 <= len(question.strip()) <= 500:
             raise HTTPException(400, "question must contain 1–500 characters")
-        if not isinstance(photos, list) or len(photos) != 3:
-            raise HTTPException(400, "Expected three freshly captured JPEG images")
+        if not isinstance(photos, list) or len(photos) != 2:
+            raise HTTPException(400, "Expected two freshly captured JPEG images")
         import base64
         import httpx
         views = []
         for entry in photos:
-            if not isinstance(entry, dict) or entry.get("view") not in ("left", "center", "right"):
+            if not isinstance(entry, dict) or entry.get("view") not in ("left", "right"):
                 raise HTTPException(400, "Invalid camera view")
             encoded = entry.get("jpeg_base64")
             if not isinstance(encoded, str) or len(encoded) > 2_100_000:
@@ -122,8 +122,8 @@ async def execute_tool(name: str, args: dict):
             if len(blob) > 1_500_000 or not blob.startswith(bytes.fromhex("ffd8")):
                 raise HTTPException(400, "Expected JPEG up to 1.5 MB")
             views.append((entry["view"], encoded))
-        if len({name for name, _ in views}) != 3:
-            raise HTTPException(400, "Expected distinct left, center, right views")
+        if {name for name, _ in views} != {"left", "right"}:
+            raise HTTPException(400, "Expected distinct left and right views")
         if not settings.openai_api_key:
             raise HTTPException(503, "Vision model not configured")
         content = [{"type": "input_text", "text":
