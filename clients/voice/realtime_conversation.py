@@ -135,7 +135,7 @@ REBOOT_CONFIRM_PHRASES = {"yes reboot now", "confirm reboot", "reboot jarvis now
 
 
 def normalized_spoken_text(text):
-    return re.sub(r"\\s+", " ", re.sub(r"[^a-z0-9 ]", " ",
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ",
                   text.lower().replace("’", "'"))).strip()
 
 
@@ -216,11 +216,15 @@ async def capture_transcript(role, transcript):
         print("[REALTIME] Transcript persistence failed:", repr(exc), flush=True)
 
 
-async def speak_turn(ws, head):
+async def speak_turn(ws, head, confirmation_prompt=False):
     first = True
     audio_proc = None
     started_at = time.monotonic()
-    await ws.send(json.dumps({"type": "response.create"}))
+    response = {"instructions": ("Say exactly: To reboot me, please say Yes, reboot now. "
+                                "Do not say you cannot reboot; this request is awaiting "
+                                "a separate locally validated confirmation. Do not call tools."),
+                "tool_choice": "none"} if confirmation_prompt else None
+    await ws.send(json.dumps({"type": "response.create", **({"response": response} if response else {})}))
     calls = []
     spoken_transcript = ""
     try:
@@ -263,11 +267,13 @@ async def speak_turn(ws, head):
         await head.set("idle")
     await capture_transcript("assistant", spoken_transcript)
     if calls:
+        confirmation_requested = False
         for call in calls:
             if call.get("name") == "request_reboot_confirmation":
                 global REBOOT_PENDING_UNTIL
                 REBOOT_PENDING_UNTIL = time.monotonic() + REBOOT_CONFIRM_TIMEOUT
                 print("[REALTIME] Reboot confirmation armed for next utterance.", flush=True)
+                confirmation_requested = True
                 await ws.send(json.dumps({"type": "conversation.item.create",
                                           "item": {"type": "function_call_output",
                                                    "call_id": call["call_id"],
@@ -296,7 +302,7 @@ async def speak_turn(ws, head):
             await ws.send(json.dumps({"type": "conversation.item.create",
                                       "item": {"type": "function_call_output",
                                                "call_id": call["call_id"], "output": output}}))
-        return await speak_turn(ws, head)
+        return await speak_turn(ws, head, confirmation_prompt=confirmation_requested)
     return True
 
 
@@ -334,7 +340,8 @@ async def send_turn(ws, wav):
                 print("[REALTIME] Reboot dispatch failed:", repr(exc), flush=True)
                 # The administrator switch or backend may be unavailable.
             return False
-        print("[REALTIME] Reboot confirmation expired or rejected; no reboot.", flush=True)
+        print(f"[REALTIME] Reboot confirmation rejected: transcript={normalized!r}, "
+              f"seconds_remaining={deadline - time.monotonic():.1f}; no reboot.", flush=True)
     return await speak_turn(ws, HEAD)
 
 
