@@ -76,3 +76,22 @@ def test_wrong_operations_rejected():
                                                "percent": "50"}))
     with pytest.raises(ValueError):
         run(bridge.execute("arbitrary_shell", {"command": "whoami"}))
+
+
+def test_core_routes_pi_command_and_waits_for_result(monkeypatch):
+    from jarvis_core import agent_runtime, executive
+
+    async def fake_send(command):
+        assert command.target == "picar-control"
+        assert command.ability == "get_audio_levels"
+        asyncio.get_running_loop().call_soon(
+            agent_runtime.deliver_status_result,
+            {"command_id": command.command_id, "status": "complete",
+             "result": {"speaker": {"percent": 45}}})
+        return True, "picar-control"
+
+    monkeypatch.setattr(executive, "send_command", fake_send)
+    result = run(agent_runtime.pi_control_data("get_audio_levels", {}))
+    assert result["available"] is True
+    assert result["speaker"]["percent"] == 45
+    assert not agent_runtime._pending_status
