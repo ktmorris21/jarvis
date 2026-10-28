@@ -167,12 +167,17 @@ async def realtime_delegate(request: Request, x_jarvis_token: str = Header(defau
     if not isinstance(message, str) or not 1 <= len(message.strip()) <= 4000:
         raise HTTPException(400, "Expected nonempty message up to 4000 characters")
     from .agent_runtime import agent_reply
+    started = time.perf_counter()
     try:
         reply = await agent_reply(message.strip(), allow_reboot=False)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Realtime Core delegation failed")
         raise HTTPException(503, "Jarvis Core reasoning unavailable")
+    finally:
+        import logging
+        logging.getLogger(__name__).info("[CORE TIMING] /realtime/delegate total: %.3fs",
+                                         time.perf_counter() - started)
     return {"spoken_response": reply, "source": "jarvis_core"}
 
 
