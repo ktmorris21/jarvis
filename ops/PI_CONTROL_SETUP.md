@@ -136,3 +136,25 @@ or terminal access.
 If audio controls fail, inspect the control bridge log. If Core reports
 `Target interface 'picar-control' is not connected`, check the Pi unit
 and its token. The core and Pi must both be updated.
+
+## Reboot recovery greeting
+
+The existing Realtime voice service now announces **"Jarvis online and ready."**
+the first time it starts successfully **after a physical Pi boot**.
+
+- This announcement uses a separate short-lived Realtime speech session with
+  the same `ash` voice as normal speech.
+- There is **no** microphone input, function execution, transcript record,
+  or follow-up listening window. After playback, the one-off session closes,
+  and Jarvis returns directly to the local "Hey Jarvis" wake-word listener.
+- The voice client compares the Linux kernel boot ID to a last-announced
+  marker under `/tmp`. Restarting `jarvis-realtime.service` in the same
+  physical boot will **not** repeat the announcement once it succeeded.
+- On first installation the marker is absent, so it also announces once
+  when the updated voice service starts, even without reboot.
+- If the greeting cannot be produced (e.g. Core/API or audio unavailable),
+  the error is logged and normal listening still starts. The marker is not
+  recorded; a subsequent voice service restart retries the greeting.
+- The notice confirms the **voice service is ready**, not that all ROS or
+  LiDAR services are healthy. Later we can change the wording to summarize
+  verified subsystem readiness.
