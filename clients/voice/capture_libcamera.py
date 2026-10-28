@@ -28,7 +28,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="jarvis-camera-") as folder:
         pattern = str(Path(folder) / "frame-#.bin")
         command = [
-            "meson", "devenv", "-C", str(build), "--", str(cam),
+            "meson", "devenv", "-C", str(build), str(cam),
             "-c", "1", "--capture=5",
             "--stream", "role=still,width=1280,height=960,pixelformat=RGB888",
             "--file=" + pattern,
