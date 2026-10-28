@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Header,HTTPException,Query,Request,WebSocket,WebSocketDisconnect,WebSocketException,status
 from pydantic import ValidationError
@@ -76,7 +77,7 @@ async def capture_realtime_transcript(
         raise HTTPException(401, "Invalid token")
     event_id = repository.record_event(
         event_type="CONVERSATION_TURN", source="picar:realtime",
-        occurred_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        occurred_at=datetime.now(timezone.utc),
         data={"session_id": req.session_id, "turn_id": req.turn_id,
               "role": req.role, "text": req.text, "input_mode": "realtime_voice"},
         importance=0.6 if req.role == "user" else 0.4,
