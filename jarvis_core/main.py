@@ -155,30 +155,6 @@ async def realtime_context(x_jarvis_token: str = Header(default="")):
     return {"instructions": baseline_context(include_recent_voice=False), "voice_instructions": voice_path.read_text(encoding="utf-8").strip(), "tools": tool_schemas()}
 
 
-@app.post("/realtime/delegate")
-async def realtime_delegate(request: Request, x_jarvis_token: str = Header(default="")):
-    """Delegate a transcribed voice request to Jarvis Core's persistent agent."""
-    if not settings.interface_token or settings.interface_token == "change-me":
-        raise HTTPException(503, "Core interface authentication is not configured")
-    if x_jarvis_token != settings.interface_token:
-        raise HTTPException(401, "Invalid token")
-    payload = await request.json()
-    message = payload.get("message") if isinstance(payload, dict) else None
-    if not isinstance(message, str) or not 1 <= len(message.strip()) <= 4000:
-        raise HTTPException(400, "Expected nonempty message up to 4000 characters")
-    from .agent_runtime import agent_reply
-    started = time.perf_counter()
-    try:
-        reply = await agent_reply(message.strip(), allow_reboot=False)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception("Realtime Core delegation failed")
-        raise HTTPException(503, "Jarvis Core reasoning unavailable")
-    finally:
-        print(f"[CORE TIMING] /realtime/delegate total: {time.perf_counter() - started:.3f}s", flush=True)
-    return {"spoken_response": reply, "source": "jarvis_core"}
-
-
 @app.post("/realtime/tool")
 async def realtime_tool(request: Request, x_jarvis_token: str = Header(default="")):
     """Strictly allowlisted, read-only Core tools for the Realtime model."""

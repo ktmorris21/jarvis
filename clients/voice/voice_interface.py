@@ -133,7 +133,7 @@ async def read_chunk(proc):
 
 
 
-async def listen_for_command(model, head, on_wake=None):
+async def listen_for_command(model, head):
     """Capture one natural wake-word-activated utterance."""
 
     PRE_ROLL_SECONDS = 1.5
@@ -179,8 +179,6 @@ async def listen_for_command(model, head, on_wake=None):
                     flush=True,
                 )
                 await head.set("listening")
-                if on_wake is not None:
-                    on_wake()
                 break
 
         # Estimate ambient noise from quieter recent frames.

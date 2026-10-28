@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from datetime import datetime, timezone
 
 from .config import settings
@@ -72,10 +71,8 @@ async def get_robot_status_data() -> dict:
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     _pending_status[command.command_id] = future
-    started = time.perf_counter()
     try:
         sent, route = await send_command(command)
-        print(f"[CORE TIMING] robot_status dispatch: {time.perf_counter() - started:.3f}s", flush=True)
         if not sent:
             return {"available": False, "reason": route}
         try:
@@ -86,7 +83,6 @@ async def get_robot_status_data() -> dict:
             return {"available": False, "reason": event.get("error") or "Status request failed"}
         return {"available": True, "status": event["result"]}
     finally:
-        print(f"[CORE TIMING] robot_status total: {time.perf_counter() - started:.3f}s", flush=True)
         _pending_status.pop(command.command_id, None)
 
 
@@ -99,7 +95,6 @@ async def pi_control_data(ability: str, data: dict) -> dict:
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     _pending_status[command.command_id] = future
-    started = time.perf_counter()
     try:
         sent, route = await send_command(command)
         if not sent:
@@ -112,7 +107,6 @@ async def pi_control_data(ability: str, data: dict) -> dict:
             return {"available": False, "reason": event.get("error") or "Pi operation failed"}
         return {"available": True, **event["result"]}
     finally:
-        print(f"[CORE TIMING] pi_control {ability} total: {time.perf_counter() - started:.3f}s", flush=True)
         _pending_status.pop(command.command_id, None)
 
 
@@ -141,16 +135,14 @@ def _session_instance():
     return _session
 
 
-async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
+async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
     from agents import Agent, Runner, FunctionTool, ModelSettings
-    turn_started = time.perf_counter()
 
     def make_tool(spec):
         name = spec["name"]
 
         async def invoke(ctx, raw_arguments):
-            tool_started = time.perf_counter()
             try:
                 arguments = json.loads(raw_arguments or "{}")
                 result = await execute_tool(name, arguments)
@@ -158,39 +150,26 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
             except Exception as exc:
                 log.warning("Core tool %s failed: %s", name, type(exc).__name__)
                 return json.dumps({"available": False, "error": str(exc)})
-            finally:
-                print(f"[CORE TIMING] tool {name} total: {time.perf_counter() - tool_started:.3f}s", flush=True)
 
         return FunctionTool(name=name, description=spec["description"],
                             params_json_schema=spec["parameters"],
                             on_invoke_tool=invoke, strict_json_schema=False)
 
-    context_started = time.perf_counter()
-    context_instructions = baseline_context()
-    print(f"[CORE TIMING] baseline_context: {time.perf_counter() - context_started:.3f}s", flush=True)
     agent = Agent(
         name="Jarvis",
         model=settings.agent_model,
-        instructions=context_instructions,
-        tools=[make_tool(spec) for spec in tool_schemas()
-               if allow_reboot or spec["name"] != "reboot_pi"],
+        instructions=baseline_context(),
+        tools=[make_tool(spec) for spec in tool_schemas()],
         model_settings=ModelSettings(parallel_tool_calls=False),
     )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
-    lock_started = time.perf_counter()
     async with _turn_lock:
-        print(f"[CORE TIMING] agent lock wait: {time.perf_counter() - lock_started:.3f}s", flush=True)
-        run_started = time.perf_counter()
-        try:
-            result = await asyncio.wait_for(
-                Runner.run(agent, text, session=_session_instance(),
-                           max_turns=settings.agent_max_turns),
-                timeout=settings.agent_timeout_seconds,
-            )
-        finally:
-            print(f"[CORE TIMING] Agents SDK Runner.run total: {time.perf_counter() - run_started:.3f}s", flush=True)
-    print(f"[CORE TIMING] agent_reply total: {time.perf_counter() - turn_started:.3f}s", flush=True)
+        result = await asyncio.wait_for(
+            Runner.run(agent, text, session=_session_instance(),
+                       max_turns=settings.agent_max_turns),
+            timeout=settings.agent_timeout_seconds,
+        )
     speech = str(result.final_output or "").strip()
     if not speech:
         raise RuntimeError("Agent produced an empty response")
