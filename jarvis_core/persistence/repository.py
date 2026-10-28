@@ -14,18 +14,18 @@ class Repository:
             rows=s.scalars(select(EventRow).order_by(desc(EventRow.received_at)).limit(limit)).all()
             return [{"id":r.id,"type":r.type,"source":r.source,"occurred_at":r.occurred_at.isoformat(),"data":r.data,"importance":r.importance} for r in reversed(rows)]
     def recent_conversation_turns(self, limit=12, hours=24):
-        """Retrieve bounded recent Realtime dialogue, independent of sensor-event volume."""
+        """Retrieve bounded recent voice and desktop dialogue across interfaces."""
         cutoff = utc_now() - timedelta(hours=hours)
         with SessionLocal() as s:
             stmt = (select(EventRow)
                     .where(EventRow.type == "CONVERSATION_TURN",
-                           EventRow.source == "picar:realtime",
                            EventRow.received_at >= cutoff)
                     .order_by(desc(EventRow.received_at))
                     .limit(limit))
             rows = s.scalars(stmt).all()
             return [
                 {"session_id": (r.data or {}).get("session_id", ""),
+                 "source": r.source,
                  "role": (r.data or {}).get("role", ""),
                  "text": (r.data or {}).get("text", ""),
                  "at": r.received_at.isoformat()}
