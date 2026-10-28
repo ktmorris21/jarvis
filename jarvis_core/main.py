@@ -152,7 +152,7 @@ async def realtime_context(x_jarvis_token: str = Header(default="")):
     from .agent_runtime import baseline_context
     from pathlib import Path
     voice_path = Path(__file__).with_name("jarvis_voice.md")
-    return {"instructions": baseline_context(), "voice_instructions": voice_path.read_text(encoding="utf-8").strip(), "tools": tool_schemas()}
+    return {"instructions": baseline_context(include_recent_voice=False), "voice_instructions": voice_path.read_text(encoding="utf-8").strip(), "tools": tool_schemas()}
 
 
 @app.post("/realtime/tool")
