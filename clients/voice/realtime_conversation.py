@@ -203,11 +203,18 @@ async def capture_transcript(role, transcript):
         print("[REALTIME] Transcript persistence failed:", repr(exc), flush=True)
 
 
-async def speak_turn(ws, head):
+async def speak_turn(ws, head, response_text=None):
     first = True
     audio_proc = None
     started_at = time.monotonic()
-    await ws.send(json.dumps({"type": "response.create"}))
+    if response_text is None:
+        raise RuntimeError("Core speech text required")
+    await ws.send(json.dumps({"type": "response.create", "response": {
+        "instructions": ("Speak the following text from Jarvis Core faithfully. "
+                         "Do not add information, reframe the identity, or call tools.\n\n"
+                         + response_text[:7000]),
+        "tool_choice": "none",
+    }}))
     calls = []
     spoken_transcript = ""
     try:
@@ -295,7 +302,17 @@ async def send_turn(ws, wav):
     if is_dismissal(transcript):
         print("[REALTIME] Dismissed: close silently.", flush=True)
         return False
-    return await speak_turn(ws, HEAD)
+    try:
+        result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/delegate",
+                                 {"message": transcript}, timeout=110)
+        answer = result["spoken_response"]
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("Core returned an empty response")
+    except Exception as exc:
+        print("[REALTIME] Core delegation failed:", repr(exc), flush=True)
+        answer = "I couldn't reach my reasoning system. Please try again."
+    print("[REALTIME] Core reply:", answer[:300], flush=True)
+    return await speak_turn(ws, HEAD, answer)
 
 
 # A boot announcement is not a conversation: no user input,
@@ -414,31 +431,8 @@ async def main(args):
                 context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
                 instructions = (context["instructions"] + "\n\n" +
                                 context["voice_instructions"] + session_rules)
-                # Fetch reference dialogue before opening a fresh Realtime session.
-                # Restore it as actual conversation items after session.updated.
-                recent_turns = []
-                try:
-                    recent = await core_call(CORE_URL, CORE_TOKEN,
-                                             "/realtime/recent-conversation", timeout=8)
-                    recent_turns = recent.get("turns", [])
-                    print(f"[REALTIME] Fetched {len(recent_turns)} historical dialogue turns",
-                          flush=True)
-                except Exception as exc:
-                    print("[REALTIME] Recent context unavailable:", repr(exc), flush=True)
-                core_tools = context["tools"]
-                if not isinstance(core_tools, list) or not all(
-                    isinstance(t, dict) and isinstance(t.get("name"), str)
-                    for t in core_tools
-                ):
-                    raise ValueError("Core returned invalid Realtime tool definitions")
-                names = [t["name"] for t in core_tools]
-                if "finish_conversation" in names or len(names) != len(set(names)):
-                    raise ValueError("Core tool names conflict with local session controls")
-                # Reboot is intentionally unavailable to Realtime. A model-generated
-                # confirmation string is NOT proof the user requested a reboot.
-                # Retain other Core tools, including LiDAR and audio controls.
-                core_tools = [t for t in core_tools if t["name"] != "reboot_pi"]
-                session_tools = core_tools + LOCAL_TOOLS
+                # Core owns cognition and conversation history.
+                session_tools = []
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
                 print("[REALTIME] Credential received from Core.", flush=True)
                 async with websockets.connect(
@@ -454,9 +448,11 @@ async def main(args):
                         "session": {
                             "type": "realtime",
                             "model": MODEL,
-                            "instructions": instructions,
+                            "instructions": ("You provide speech output for Jarvis Core. "
+                                             "Never answer independently or invoke tools. "
+                                             "Speak only Core-supplied responses."),
                             "tools": session_tools,
-                            "tool_choice": "auto",
+                            "tool_choice": "none",
                             "output_modalities": ["audio"],
                             "audio": {
                                 "input": {
@@ -475,10 +471,7 @@ async def main(args):
                         },
                     }))
                     await receive_until(ws, "session.updated", timeout=15)
-                    try:
-                        await restore_recent_dialogue(ws, recent_turns)
-                    except Exception as exc:
-                        print("[REALTIME] History restoration failed:", repr(exc), flush=True)
+                    # No historical turn replay: Core's SDK session owns context.
                     current = initial_wav
                     turns = 0
                     while turns < args.max_turns and time.monotonic() - opened < args.max_session_seconds:
