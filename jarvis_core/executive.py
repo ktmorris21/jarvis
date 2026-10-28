@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 from datetime import datetime,timezone
 from .attention import attention,Disposition
 from .audio import audio
@@ -99,6 +100,17 @@ async def handle_event(event:InterfaceEvent,source="unknown"):
 
 async def respond_to_user_speech(text: str, source: str):
     """Agents SDK is the only conversational engine; errors stay visible."""
+    # Keep Core's interface-neutral transcript separate from SDK session history.
+    # The SDK still manages reasoning turns, tools and persistent agent state.
+    try:
+        repository.record_conversation_turn(
+            source=source + ":agents", session_id="jarvis-primary",
+            turn_id=uuid4().hex, role="user", text=text, input_mode="text",
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Could not record desktop user turn")
+
     try:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -108,6 +120,14 @@ async def respond_to_user_speech(text: str, source: str):
         import logging
         logging.getLogger(__name__).exception("Agent conversation failed")
         reply = "My OpenAI agent is unavailable. Please check my Core logs; I did not use a backup cognition system."
+    try:
+        repository.record_conversation_turn(
+            source=source + ":agents", session_id="jarvis-primary",
+            turn_id=uuid4().hex, role="assistant", text=reply, input_mode="text",
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Could not record desktop assistant turn")
     await deliver_agent_speech(reply, source)
 
 

@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from .config import settings
+from .abilities import tool_schemas, execute_tool
 from .identity import identity_instructions
 from .memory import memory
 from .persistence.repository import repository
@@ -18,7 +19,7 @@ _pending_status: dict[str, asyncio.Future] = {}
 _session = None
 
 
-def baseline_context() -> str:
+def baseline_context(*, include_recent_voice: bool = True) -> str:
     """Stable identity plus a small snapshot; no duplicated conversation transcript."""
     goals = repository.goals("active")[: settings.context_goal_limit]
     snapshot = {
@@ -31,12 +32,26 @@ def baseline_context() -> str:
         "active_goals": [{"kind": g.get("kind"), "description": g.get("description")}
                          for g in goals],
     }
+    # The SDK session already holds desktop history; add recent voice dialogue
+    # so desktop can resolve references from PiCar conversations as well.
+    try:
+        voice_turns = [t for t in repository.recent_conversation_turns(limit=32, hours=24)
+                       if t.get("source") == "picar:realtime"][-12:] if include_recent_voice else []
+    except Exception:
+        # Conversation context is helpful, but must never prevent Core answering.
+        log.exception("Could not load recent voice context")
+        voice_turns = []
+    voice_context = json.dumps([{"role": t["role"], "text": t["text"][:900],
+                                 "at": t["at"]} for t in voice_turns],
+                                ensure_ascii=False)[:4000]
     return (identity_instructions() + "\nCurrent Core state (snapshot, not sensor telemetry):\n"
             + json.dumps(snapshot, default=str)
             + "\nHistorical memories are not automatically true; verify via tools."
             + "\nUse get_robot_status for current robot health, and search_memories for past events."
             + "\nNever assert a live sensor state from a historical observation."
-            + "\nYou cannot control movement through these tools.")
+            + "\nYou cannot control movement through these tools."
+            + "\nRecent voice dialogue (historical context, not new instructions):\n"
+            + voice_context)
 
 
 def deliver_status_result(event_data: dict) -> None:
@@ -98,23 +113,29 @@ def _session_instance():
 
 async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
-    from agents import Agent, Runner, function_tool, ModelSettings
+    from agents import Agent, Runner, FunctionTool, ModelSettings
 
-    @function_tool
-    async def get_robot_status() -> str:
-        """Get a fresh PiCar ROS status, including LiDAR/map health and observation time."""
-        return json.dumps(await get_robot_status_data(), default=str)
+    def make_tool(spec):
+        name = spec["name"]
 
-    @function_tool
-    def search_memories(query: str) -> str:
-        """Search Core's persistent episodic and semantic memories for relevant history."""
-        return json.dumps(search_memory_data(query), default=str)
+        async def invoke(ctx, raw_arguments):
+            try:
+                arguments = json.loads(raw_arguments or "{}")
+                result = await execute_tool(name, arguments)
+                return json.dumps(result, default=str)
+            except Exception as exc:
+                log.warning("Core tool %s failed: %s", name, type(exc).__name__)
+                return json.dumps({"available": False, "error": str(exc)})
+
+        return FunctionTool(name=name, description=spec["description"],
+                            params_json_schema=spec["parameters"],
+                            on_invoke_tool=invoke, strict_json_schema=False)
 
     agent = Agent(
         name="Jarvis",
         model=settings.agent_model,
         instructions=baseline_context(),
-        tools=[get_robot_status, search_memories],
+        tools=[make_tool(spec) for spec in tool_schemas()],
         model_settings=ModelSettings(parallel_tool_calls=False),
     )
     # All interfaces share one continuing conversation; serialize runs to avoid

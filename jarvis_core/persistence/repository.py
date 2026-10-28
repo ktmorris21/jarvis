@@ -9,23 +9,35 @@ class Repository:
     def record_event(self, *, event_type, source, occurred_at, data, importance=None):
         row=EventRow(type=event_type,source=source,occurred_at=occurred_at,received_at=utc_now(),data=data,importance=importance)
         with SessionLocal() as s: s.add(row); s.commit(); return row.id
+    def record_conversation_turn(self, *, source, session_id, turn_id, role, text,
+                                 input_mode):
+        if role not in ("user", "assistant"):
+            raise ValueError("Invalid conversation role")
+        return self.record_event(
+            event_type="CONVERSATION_TURN", source=source,
+            occurred_at=utc_now(),
+            data={"session_id": session_id, "turn_id": turn_id,
+                  "role": role, "text": text, "input_mode": input_mode},
+            importance=0.6 if role == "user" else 0.4,
+        )
+
     def recent_events(self, limit=20):
         with SessionLocal() as s:
             rows=s.scalars(select(EventRow).order_by(desc(EventRow.received_at)).limit(limit)).all()
             return [{"id":r.id,"type":r.type,"source":r.source,"occurred_at":r.occurred_at.isoformat(),"data":r.data,"importance":r.importance} for r in reversed(rows)]
     def recent_conversation_turns(self, limit=12, hours=24):
-        """Retrieve bounded recent Realtime dialogue, independent of sensor-event volume."""
+        """Retrieve bounded recent voice and desktop dialogue across interfaces."""
         cutoff = utc_now() - timedelta(hours=hours)
         with SessionLocal() as s:
             stmt = (select(EventRow)
                     .where(EventRow.type == "CONVERSATION_TURN",
-                           EventRow.source == "picar:realtime",
                            EventRow.received_at >= cutoff)
                     .order_by(desc(EventRow.received_at))
                     .limit(limit))
             rows = s.scalars(stmt).all()
             return [
                 {"session_id": (r.data or {}).get("session_id", ""),
+                 "source": r.source,
                  "role": (r.data or {}).get("role", ""),
                  "text": (r.data or {}).get("text", ""),
                  "at": r.received_at.isoformat()}
