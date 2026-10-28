@@ -36,19 +36,6 @@ CORE_TOOLS = {
             "confirmation": {"type": "string", "enum": ["REBOOT JARVIS NOW"]},
         }, "required": ["confirmation"], "additionalProperties": False},
     },
-    "drive_timed": {
-        "type": "function", "name": "drive_timed",
-        "description": "Move the PiCar-X for a requested short interval ONLY when the user explicitly asks for movement. Right/left mean forward while steering. The Pi enforces the timer and stops locally. No obstacle avoidance is active. Do not use for autonomous navigation.",
-        "parameters": {"type": "object", "properties": {
-            "direction": {"type": "string", "enum": ["forward", "backward", "left", "right"]},
-            "duration_seconds": {"type": "number", "minimum": 0.1, "maximum": 5.0},
-        }, "required": ["direction", "duration_seconds"], "additionalProperties": False},
-    },
-    "stop_driving": {
-        "type": "function", "name": "stop_driving",
-        "description": "Immediately cancel an ongoing timed drive. Use when the user says stop driving or halt movement.",
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
     "get_robot_status": {
         "type": "function", "name": "get_robot_status",
         "description": "Get current robot, ROS, LiDAR and map health.",
@@ -88,7 +75,7 @@ async def execute_tool(name: str, args: dict):
         raise HTTPException(400, "Tool arguments must be an object")
     from .agent_runtime import get_robot_status_data, search_memory_data
     if name in {"get_audio_levels", "set_audio_level", "get_lidar_service",
-                "set_lidar_service", "reboot_pi", "drive_timed", "stop_driving"}:
+                "set_lidar_service", "reboot_pi"}:
         # Exact argument validation applies for both Agents SDK and Realtime.
         if name in {"get_audio_levels", "get_lidar_service"} and args:
             raise HTTPException(400, "This tool accepts no arguments")
@@ -105,16 +92,6 @@ async def execute_tool(name: str, args: dict):
                 set(args) != {"confirmation"}
                 or args["confirmation"] != "REBOOT JARVIS NOW"):
             raise HTTPException(400, "Explicit reboot confirmation required")
-        if name == "drive_timed":
-            import math
-            if (set(args) != {"direction", "duration_seconds"}
-                    or args["direction"] not in {"forward", "backward", "left", "right"}
-                    or type(args["duration_seconds"]) not in (int, float)
-                    or not math.isfinite(args["duration_seconds"])
-                    or not 0.1 <= args["duration_seconds"] <= 5.0):
-                raise HTTPException(400, "Invalid timed drive request")
-        if name == "stop_driving" and args:
-            raise HTTPException(400, "stop_driving takes no arguments")
         from .agent_runtime import pi_control_data
         return await pi_control_data(name, args)
 

@@ -7,13 +7,12 @@ import asyncio
 import json
 import os
 import re
-import math
 from datetime import datetime, timezone
 
 import websockets
 
 CAPABILITIES = ["get_audio_levels", "set_audio_level", "get_lidar_service",
-                "set_lidar_service", "reboot_pi", "drive_timed", "stop_driving"]
+                "set_lidar_service", "reboot_pi"]
 MAPPING_UNIT = "jarvis-mapping@shadowfax.service"
 ALLOWED_CONTROLS = {"speaker": "JARVIS_SPEAKER_CONTROL",
                     "microphone": "JARVIS_MIC_CONTROL"}
@@ -130,77 +129,7 @@ async def schedule_reboot():
         print("Reboot failed:", repr(exc), flush=True)
 
 
-
-# Only this bridge owns the motor while enabled. Never run another PiCar-X
-# motor-controlling process concurrently. Stop in finally on disconnect.
-_motion_task = None
-_motion_hardware = None
-
-def _motor():
-    global _motion_hardware
-    if os.environ.get("JARVIS_ENABLE_MOTION") != "1":
-        raise RuntimeError("Motion disabled; enable JARVIS_ENABLE_MOTION=1 on the Pi")
-    if _motion_hardware is None:
-        from .hardware import PiCarHardware
-        _motion_hardware = PiCarHardware()
-    return _motion_hardware
-
-async def stop_motion():
-    global _motion_task
-    task = _motion_task
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    _motion_task = None
-    if _motion_hardware is not None:
-        _motion_hardware.stop()
-    return {"stopped": True}
-
-async def timed_motion(data):
-    if (set(data) != {"direction", "duration_seconds"}
-            or data.get("direction") not in {"forward", "backward", "left", "right"}
-            or type(data.get("duration_seconds")) not in (int, float)
-            or not math.isfinite(data["duration_seconds"])
-            or not 0.1 <= data["duration_seconds"] <= 5):
-        raise ValueError("direction and duration_seconds (0.1–5) required")
-    direction, seconds = data["direction"], float(data["duration_seconds"])
-    hw = _motor()
-    # Steering sign is calibrated on the PiCar-X; verify with wheels lifted.
-    steering = {"forward": 0, "backward": 0, "left": -25, "right": 25}[direction]
-    physical_direction = "backward" if direction == "backward" else "forward"
-    try:
-        hw.set_steering(steering)
-        hw.drive(physical_direction, 20)
-        await asyncio.sleep(seconds)
-        return {"direction": direction, "duration_seconds": seconds, "stopped": True}
-    finally:
-        hw.stop()
-
-async def _motion_result(ws, command):
-    global _motion_task
-    ability = command["ability"]
-    try:
-        result = await timed_motion(command["data"])
-        status, error = "complete", None
-    except asyncio.CancelledError:
-        result, status, error = {"stopped": True}, "failed", "movement interrupted"
-    except Exception as exc:
-        result, status, error = None, "failed", str(exc)[:300]
-    finally:
-        if _motion_hardware is not None:
-            _motion_hardware.stop()
-    await ws.send(json.dumps({
-        "type": "event", "event": "COMMAND_RESULT", "timestamp": utc_now(),
-        "data": {"command_id": command.get("command_id"), "ability": ability,
-                 "status": status, "result": result, "error": error},
-    }))
-
-
 async def serve():
-    global _motion_task
     url = os.environ["JARVIS_URL"].rstrip("/")
     token = os.environ["JARVIS_TOKEN"]
     if not url.startswith("https://") and not url.startswith("http://localhost:"):
@@ -218,48 +147,25 @@ async def serve():
                 if ack.get("type") != "hello_ack":
                     raise RuntimeError("Core rejected management bridge")
                 print("Pi control bridge connected", flush=True)
-                try:
-                    async for raw in ws:
-                        command = json.loads(raw)
-                        if command.get("type") != "command":
-                            continue
-                        ability = command.get("ability")
-                        try:
-                            if ability not in CAPABILITIES:
-                                raise ValueError("Unsupported Pi control ability")
-                            if ability == "stop_driving":
-                                if command.get("data"):
-                                    raise ValueError("stop_driving takes no arguments")
-                                result = await stop_motion()
-                            elif ability == "drive_timed":
-                                if _motion_task is not None and not _motion_task.done():
-                                    raise RuntimeError("Drive in progress; stop first")
-                                # Validate and check local enablement before accepting.
-                                data = command.get("data") or {}
-                                if (set(data) != {"direction", "duration_seconds"}
-                                        or data.get("direction") not in {"forward", "backward", "left", "right"}
-                                        or type(data.get("duration_seconds")) not in (int, float)
-                                        or not math.isfinite(data["duration_seconds"])
-                                        or not 0.1 <= data["duration_seconds"] <= 5):
-                                    raise ValueError("Invalid drive parameters")
-                                _motor()
-                                _motion_task = asyncio.create_task(
-                                    _motion_result(ws, {**command, "data": data}))
-                                continue
-                            else:
-                                result = await execute(ability, command.get("data") or {})
-                            status, error = "complete", None
-                        except Exception as exc:
-                            result, status, error = None, "failed", str(exc)[:300]
-                        await ws.send(json.dumps({
-                            "type": "event", "event": "COMMAND_RESULT",
-                            "timestamp": utc_now(),
-                            "data": {"command_id": command.get("command_id"),
-                                     "ability": ability, "status": status,
-                                     "result": result, "error": error},
-                        }))
-                finally:
-                    await stop_motion()
+                async for raw in ws:
+                    command = json.loads(raw)
+                    if command.get("type") != "command":
+                        continue
+                    ability = command.get("ability")
+                    try:
+                        if ability not in CAPABILITIES:
+                            raise ValueError("Unsupported Pi control ability")
+                        result = await execute(ability, command.get("data") or {})
+                        status, error = "complete", None
+                    except Exception as exc:
+                        result, status, error = None, "failed", str(exc)[:300]
+                    await ws.send(json.dumps({
+                        "type": "event", "event": "COMMAND_RESULT",
+                        "timestamp": utc_now(),
+                        "data": {"command_id": command.get("command_id"),
+                                 "ability": ability, "status": status,
+                                 "result": result, "error": error},
+                    }))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
