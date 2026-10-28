@@ -76,12 +76,10 @@ async def capture_realtime_transcript(
         raise HTTPException(503, "Core interface authentication is not configured")
     if x_jarvis_token != settings.interface_token:
         raise HTTPException(401, "Invalid token")
-    event_id = repository.record_event(
-        event_type="CONVERSATION_TURN", source="picar:realtime",
-        occurred_at=datetime.now(timezone.utc),
-        data={"session_id": req.session_id, "turn_id": req.turn_id,
-              "role": req.role, "text": req.text, "input_mode": "realtime_voice"},
-        importance=0.6 if req.role == "user" else 0.4,
+    event_id = repository.record_conversation_turn(
+        source="picar:realtime", session_id=req.session_id,
+        turn_id=req.turn_id, role=req.role, text=req.text,
+        input_mode="realtime_voice",
     )
     return {"stored": True, "event_id": event_id}
 
