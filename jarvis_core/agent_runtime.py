@@ -19,7 +19,7 @@ _pending_status: dict[str, asyncio.Future] = {}
 _session = None
 
 
-def baseline_context() -> str:
+def baseline_context(*, include_recent_voice: bool = True) -> str:
     """Stable identity plus a small snapshot; no duplicated conversation transcript."""
     goals = repository.goals("active")[: settings.context_goal_limit]
     snapshot = {
@@ -36,7 +36,7 @@ def baseline_context() -> str:
     # so desktop can resolve references from PiCar conversations as well.
     try:
         voice_turns = [t for t in repository.recent_conversation_turns(limit=32, hours=24)
-                       if t.get("source") == "picar:realtime"][-12:]
+                       if t.get("source") == "picar:realtime"][-12:] if include_recent_voice else []
     except Exception:
         # Conversation context is helpful, but must never prevent Core answering.
         log.exception("Could not load recent voice context")
