@@ -85,6 +85,28 @@ async def capture_realtime_transcript(
     return {"stored": True, "event_id": event_id}
 
 
+@app.get("/realtime/recent-conversation")
+async def realtime_recent_conversation(x_jarvis_token: str = Header(default="")):
+    """Return a bounded cross-session voice history; read-only, authenticated."""
+    if not settings.interface_token or settings.interface_token == "change-me":
+        raise HTTPException(503, "Core interface authentication is not configured")
+    if x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    recent = repository.recent_conversation_turns(limit=12, hours=24)
+    # Bound total context in addition to count and age. Prefer newest turns.
+    selected = []
+    budget = 4000
+    for turn in reversed(recent):
+        text = turn["text"].strip()
+        if not text:
+            continue
+        remaining = budget - sum(len(t["text"]) for t in selected)
+        if remaining <= 0:
+            break
+        selected.append({**turn, "text": text[:min(900, remaining)]})
+    return {"turns": list(reversed(selected)), "lookback_hours": 24}
+
+
 @app.post("/realtime/client-secret")
 async def realtime_client_secret(x_jarvis_token: str = Header(default="")):
     """Issue a short-lived Realtime credential; never expose the permanent key."""
