@@ -126,14 +126,27 @@ LOCAL_TOOLS = [
      "parameters": {"type": "object", "properties": {}}}
 ]
 
+CORE_HTTP = None
+
+
+def timing(stage, started):
+    print(f"[TIMING] {stage}: {time.monotonic() - started:.2f}s", flush=True)
+
+
 async def core_call(url, token, path, payload=None, timeout=25):
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        if payload is None:
-            response = await client.get(url.rstrip("/") + path, headers={"X-Jarvis-Token":token})
-        else:
-            response = await client.post(url.rstrip("/") + path, headers={"X-Jarvis-Token":token}, json=payload)
-        response.raise_for_status()
-        return response.json()
+    # Reuse the same TCP/TLS pool throughout the voice client's lifetime.
+    client = CORE_HTTP
+    if client is None:
+        raise RuntimeError("Core HTTP client not initialized")
+    started = time.monotonic()
+    kwargs = {"headers": {"X-Jarvis-Token": token}, "timeout": timeout}
+    if payload is None:
+        response = await client.get(url.rstrip("/") + path, **kwargs)
+    else:
+        response = await client.post(url.rstrip("/") + path, json=payload, **kwargs)
+    response.raise_for_status()
+    timing("Core HTTP " + path, started)
+    return response.json()
 
 
 async def restore_recent_dialogue(ws, turns):
@@ -255,6 +268,7 @@ async def speak_turn(ws, head, response_text=None):
                     audio_proc.kill()
                     await audio_proc.wait()
         await head.set("idle")
+    timing("Realtime speech delivery", started_at)
     await capture_transcript("assistant", spoken_transcript)
     if calls:
         for call in calls:
@@ -286,6 +300,7 @@ async def speak_turn(ws, head, response_text=None):
 
 
 async def send_turn(ws, wav):
+    transcription_started = time.monotonic()
     await ws.send(json.dumps({
         "type": "input_audio_buffer.append",
         "audio": base64.b64encode(convert_wav_to_pcm24(wav)).decode(),
@@ -297,11 +312,13 @@ async def send_turn(ws, wav):
     # Note: transcription is a separate model and adds latency/cost.
     event = await receive_until(ws, "conversation.item.input_audio_transcription.completed", timeout=20)
     transcript = event.get("transcript", "")
+    timing("Realtime transcription", transcription_started)
     print("[REALTIME] Heard:", transcript, flush=True)
     await capture_transcript("user", transcript)
     if is_dismissal(transcript):
         print("[REALTIME] Dismissed: close silently.", flush=True)
         return False
+    delegate_started = time.monotonic()
     try:
         result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/delegate",
                                  {"message": transcript}, timeout=110)
@@ -311,6 +328,7 @@ async def send_turn(ws, wav):
     except Exception as exc:
         print("[REALTIME] Core delegation failed:", repr(exc), flush=True)
         answer = "I couldn't reach my reasoning system. Please try again."
+    timing("Core delegated answer", delegate_started)
     print("[REALTIME] Core reply:", answer[:300], flush=True)
     return await speak_turn(ws, HEAD, answer)
 
@@ -398,21 +416,57 @@ async def speak_boot_announcement(head, core_url, core_token):
         await head.set("idle")
 
 
+async def prepare_voice_session():
+    """Open and configure Realtime while microphone capture proceeds."""
+    started = time.monotonic()
+    credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
+    timing("Realtime credential", started)
+    ws = await websockets.connect(
+        REALTIME_URL,
+        additional_headers={"Authorization": "Bearer " + credential["value"]},
+        max_size=16 * 1024 * 1024,
+        open_timeout=15,
+        ping_interval=20,
+        ping_timeout=20,
+    )
+    try:
+        timing("Realtime websocket", started)
+        await ws.send(json.dumps({
+            "type": "session.update",
+            "session": {
+                "type": "realtime", "model": MODEL,
+                "instructions": ("You provide speech output for Jarvis Core. "
+                                 "Never answer independently or invoke tools. "
+                                 "Speak only Core-supplied responses."),
+                "tools": [], "tool_choice": "none",
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
+                        "turn_detection": None,
+                        "transcription": {"model": "gpt-4o-transcribe", "language": "en"},
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
+                        "voice": "ash",
+                    },
+                },
+            },
+        }))
+        await receive_until(ws, "session.updated", timeout=15)
+        timing("Realtime session ready", started)
+        return ws
+    except BaseException:
+        await ws.close()
+        raise
+
+
 async def main(args):
-    global HEAD, CORE_URL, CORE_TOKEN, SESSION_ID
+    global HEAD, CORE_URL, CORE_TOKEN, SESSION_ID, CORE_HTTP
     CORE_URL = args.core_url
     CORE_TOKEN = os.environ.get("JARVIS_INTERFACE_TOKEN") or getpass.getpass("Jarvis Core token: ")
-    # Session mechanics stay in code; vocal delivery is edited on Core.
-    session_rules = (
-        "\nVoice session operating rules:\n"
-        "- If the user clearly ends the conversation, call finish_conversation "
-        "without another spoken response.\n"
-        "- Request live status through get_robot_status and relevant prior "
-        "experiences through search_memories; never guess sensor data.\n"
-        "- Do not narrate stage directions.\n"
-    )
-
     wake = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
+    CORE_HTTP = httpx.AsyncClient(timeout=110)
     HEAD = HeadExpressions()
     await HEAD.start()
     try:
@@ -423,78 +477,66 @@ async def main(args):
             print("[REALTIME] Boot greeting unavailable:", repr(exc), flush=True)
         while True:
             await HEAD.set("idle")
-            initial_wav = await listen_for_command(wake, HEAD)
-            await HEAD.set("thinking")
+            prep_task = None
+
+            def on_wake():
+                nonlocal prep_task
+                prep_task = asyncio.create_task(prepare_voice_session())
+
             opened = time.monotonic()
-            SESSION_ID = uuid4().hex
+            ws = None
             try:
-                # Core owns cognition and conversation history.
-                session_tools = []
-                credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
+                initial_wav = await listen_for_command(wake, HEAD, on_wake=on_wake)
+                await HEAD.set("thinking")
+                SESSION_ID = uuid4().hex
+                if prep_task is None:
+                    raise RuntimeError("Wake word did not start Realtime preparation")
+                ws = await prep_task
+                timing("Wake-to-session-ready", opened)
                 print("[REALTIME] Credential received from Core.", flush=True)
-                async with websockets.connect(
-                    REALTIME_URL,
-                    additional_headers={"Authorization": "Bearer " + credential["value"]},
-                    max_size=16 * 1024 * 1024,
-                    open_timeout=15,
-                    ping_interval=20,
-                    ping_timeout=20,
-                ) as ws:
-                    await ws.send(json.dumps({
-                        "type": "session.update",
-                        "session": {
-                            "type": "realtime",
-                            "model": MODEL,
-                            "instructions": ("You provide speech output for Jarvis Core. "
-                                             "Never answer independently or invoke tools. "
-                                             "Speak only Core-supplied responses."),
-                            "tools": session_tools,
-                            "tool_choice": "none",
-                            "output_modalities": ["audio"],
-                            "audio": {
-                                "input": {
-                                    "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                                    "turn_detection": None,
-                                    "transcription": {
-                                        "model": "gpt-4o-transcribe",
-                                        "language": "en",
-                                    },
-                                },
-                                "output": {
-                                    "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                                    "voice": "ash",
-                                },
-                            },
-                        },
-                    }))
-                    await receive_until(ws, "session.updated", timeout=15)
-                    # No historical turn replay: Core's SDK session owns context.
-                    current = initial_wav
-                    turns = 0
-                    while turns < args.max_turns and time.monotonic() - opened < args.max_session_seconds:
-                        await HEAD.set("thinking")
-                        keep_talking = await send_turn(ws, current)
-                        if not keep_talking:
-                            break
-                        turns += 1
-                        print(f"[REALTIME] Follow-up window: {args.followup_seconds}s; "
-                              "say goodbye to end silently", flush=True)
-                        left = min(args.followup_seconds,
-                                   max(0, args.max_session_seconds - (time.monotonic()-opened)))
-                        if left <= 0:
-                            break
-                        current = await capture_followup(HEAD, left)
-                        if current is None:
-                            print("[REALTIME] Conversation expired after silence.", flush=True)
-                            break
+                # Core owns past dialogue; Realtime is speech-only.
+                current = initial_wav
+                turns = 0
+                while turns < args.max_turns and time.monotonic() - opened < args.max_session_seconds:
+                    await HEAD.set("thinking")
+                    keep_talking = await send_turn(ws, current)
+                    if not keep_talking:
+                        break
+                    turns += 1
+                    print(f"[REALTIME] Follow-up window: {args.followup_seconds}s; "
+                          "say goodbye to end silently", flush=True)
+                    left = min(args.followup_seconds,
+                               max(0, args.max_session_seconds - (time.monotonic()-opened)))
+                    if left <= 0:
+                        break
+                    current = await capture_followup(HEAD, left)
+                    if current is None:
+                        print("[REALTIME] Conversation expired after silence.", flush=True)
+                        break
             except Exception as exc:
                 print("[REALTIME] Session ended with error:", repr(exc), flush=True)
             finally:
+                if prep_task is not None and not prep_task.done():
+                    prep_task.cancel()
+                    try:
+                        await prep_task
+                    except asyncio.CancelledError:
+                        pass
+                if prep_task is not None and prep_task.done() and not prep_task.cancelled():
+                    try:
+                        prepared_ws = prep_task.result()
+                        if ws is None:
+                            ws = prepared_ws
+                    except Exception:
+                        pass
+                if ws is not None:
+                    await ws.close()
                 await HEAD.set("idle")
             print("[REALTIME] Back to local wake-word idle.", flush=True)
     finally:
         await HEAD.set("idle")
         await HEAD.close()
+        await CORE_HTTP.aclose()
 
 
 if __name__ == "__main__":
