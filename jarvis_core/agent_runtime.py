@@ -75,7 +75,7 @@ async def get_robot_status_data() -> dict:
     started = time.perf_counter()
     try:
         sent, route = await send_command(command)
-        log.info("[CORE TIMING] robot_status dispatch: %.3fs", time.perf_counter() - started)
+        print(f"[CORE TIMING] robot_status dispatch: {time.perf_counter() - started:.3f}s", flush=True)
         if not sent:
             return {"available": False, "reason": route}
         try:
@@ -86,7 +86,7 @@ async def get_robot_status_data() -> dict:
             return {"available": False, "reason": event.get("error") or "Status request failed"}
         return {"available": True, "status": event["result"]}
     finally:
-        log.info("[CORE TIMING] robot_status total: %.3fs", time.perf_counter() - started)
+        print(f"[CORE TIMING] robot_status total: {time.perf_counter() - started:.3f}s", flush=True)
         _pending_status.pop(command.command_id, None)
 
 
@@ -112,7 +112,7 @@ async def pi_control_data(ability: str, data: dict) -> dict:
             return {"available": False, "reason": event.get("error") or "Pi operation failed"}
         return {"available": True, **event["result"]}
     finally:
-        log.info("[CORE TIMING] pi_control %s total: %.3fs", ability, time.perf_counter() - started)
+        print(f"[CORE TIMING] pi_control {ability} total: {time.perf_counter() - started:.3f}s", flush=True)
         _pending_status.pop(command.command_id, None)
 
 
@@ -159,8 +159,7 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
                 log.warning("Core tool %s failed: %s", name, type(exc).__name__)
                 return json.dumps({"available": False, "error": str(exc)})
             finally:
-                log.info("[CORE TIMING] tool %s total: %.3fs",
-                         name, time.perf_counter() - tool_started)
+                print(f"[CORE TIMING] tool {name} total: {time.perf_counter() - tool_started:.3f}s", flush=True)
 
         return FunctionTool(name=name, description=spec["description"],
                             params_json_schema=spec["parameters"],
@@ -168,7 +167,7 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
 
     context_started = time.perf_counter()
     context_instructions = baseline_context()
-    log.info("[CORE TIMING] baseline_context: %.3fs", time.perf_counter() - context_started)
+    print(f"[CORE TIMING] baseline_context: {time.perf_counter() - context_started:.3f}s", flush=True)
     agent = Agent(
         name="Jarvis",
         model=settings.agent_model,
@@ -181,7 +180,7 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
     # racing updates to the session or concurrent Core reasoning.
     lock_started = time.perf_counter()
     async with _turn_lock:
-        log.info("[CORE TIMING] agent lock wait: %.3fs", time.perf_counter() - lock_started)
+        print(f"[CORE TIMING] agent lock wait: {time.perf_counter() - lock_started:.3f}s", flush=True)
         run_started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
@@ -190,9 +189,8 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
                 timeout=settings.agent_timeout_seconds,
             )
         finally:
-            log.info("[CORE TIMING] Agents SDK Runner.run total: %.3fs",
-                     time.perf_counter() - run_started)
-    log.info("[CORE TIMING] agent_reply total: %.3fs", time.perf_counter() - turn_started)
+            print(f"[CORE TIMING] Agents SDK Runner.run total: {time.perf_counter() - run_started:.3f}s", flush=True)
+    print(f"[CORE TIMING] agent_reply total: {time.perf_counter() - turn_started:.3f}s", flush=True)
     speech = str(result.final_output or "").strip()
     if not speech:
         raise RuntimeError("Agent produced an empty response")
