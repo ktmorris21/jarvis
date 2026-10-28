@@ -9,6 +9,18 @@ class Repository:
     def record_event(self, *, event_type, source, occurred_at, data, importance=None):
         row=EventRow(type=event_type,source=source,occurred_at=occurred_at,received_at=utc_now(),data=data,importance=importance)
         with SessionLocal() as s: s.add(row); s.commit(); return row.id
+    def record_conversation_turn(self, *, source, session_id, turn_id, role, text,
+                                 input_mode):
+        if role not in ("user", "assistant"):
+            raise ValueError("Invalid conversation role")
+        return self.record_event(
+            event_type="CONVERSATION_TURN", source=source,
+            occurred_at=utc_now(),
+            data={"session_id": session_id, "turn_id": turn_id,
+                  "role": role, "text": text, "input_mode": input_mode},
+            importance=0.6 if role == "user" else 0.4,
+        )
+
     def recent_events(self, limit=20):
         with SessionLocal() as s:
             rows=s.scalars(select(EventRow).order_by(desc(EventRow.received_at)).limit(limit)).all()
