@@ -94,12 +94,9 @@ async def execute(ability, data):
     if ability == "get_lidar_service":
         if data:
             raise ValueError("get_lidar_service takes no parameters")
-        proc = await asyncio.create_subprocess_exec(
-            "/usr/bin/systemctl", "is-active", MAPPING_UNIT,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        return {"unit": MAPPING_UNIT, "service_state": out.decode().strip(),
+        active = await run_fixed("/usr/bin/systemctl", "show", "-p",
+                                 "ActiveState", "--value", MAPPING_UNIT)
+        return {"unit": MAPPING_UNIT, "service_state": active,
                 "controls_entire_mapping_stack": True}
 
     if ability == "set_lidar_service":
