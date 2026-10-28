@@ -200,6 +200,7 @@ async def _motion_result(ws, command):
 
 
 async def serve():
+    global _motion_task
     url = os.environ["JARVIS_URL"].rstrip("/")
     token = os.environ["JARVIS_TOKEN"]
     if not url.startswith("https://") and not url.startswith("http://localhost:"):
