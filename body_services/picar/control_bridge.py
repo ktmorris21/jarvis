@@ -58,7 +58,7 @@ def control_name(kind):
 async def read_level(kind):
     name = control_name(kind)
     output = await run_fixed(*mixer_args(), "sget", name)
-    levels = re.findall(r"\\[(\\d{1,3})%\\]", output)
+    levels = re.findall(r"\[(\d{1,3})%\]", output)
     if not levels:
         raise RuntimeError(f"ALSA control {name!r} has no percentage level")
     return {"device": kind, "percent": int(levels[-1]), "control": name}
