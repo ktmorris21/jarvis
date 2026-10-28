@@ -185,8 +185,8 @@ async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
         run_started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
-            Runner.run(agent, text, session=_session_instance(),
-                       max_turns=settings.agent_max_turns),
+                Runner.run(agent, text, session=_session_instance(),
+                           max_turns=settings.agent_max_turns),
                 timeout=settings.agent_timeout_seconds,
             )
         finally:
