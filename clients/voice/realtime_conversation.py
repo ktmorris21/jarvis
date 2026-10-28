@@ -428,9 +428,6 @@ async def main(args):
             opened = time.monotonic()
             SESSION_ID = uuid4().hex
             try:
-                context = await core_call(CORE_URL, CORE_TOKEN, "/realtime/context")
-                instructions = (context["instructions"] + "\n\n" +
-                                context["voice_instructions"] + session_rules)
                 # Core owns cognition and conversation history.
                 session_tools = []
                 credential = await core_call(CORE_URL, CORE_TOKEN, "/realtime/client-secret", {})
