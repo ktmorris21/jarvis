@@ -1,0 +1,21 @@
+[Unit]
+Description=Jarvis restricted Pi system management bridge for %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/jarvis
+Environment=PYTHONUNBUFFERED=1
+Environment=JARVIS_ALLOW_REMOTE_REBOOT=0
+EnvironmentFile=/etc/jarvis/bridge.env
+ExecStart=/usr/bin/python3 -m body_services.picar.control_bridge
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target
