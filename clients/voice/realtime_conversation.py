@@ -260,7 +260,9 @@ async def speak_turn(ws, head):
                     arguments["_capture_images"] = await capture_environment(head)
                 result = await core_call(CORE_URL, CORE_TOKEN, "/realtime/tool",
                                          {"name": call["name"], "arguments": arguments},
-                                         timeout=90 if call["name"] == "inspect_environment" else 25)
+                                         timeout=(90 if call["name"] == "inspect_environment" else
+                                                  45 if call["name"] in {"set_lidar_service", "reboot_pi"}
+                                                  else 25))
                 output = json.dumps(result)
             except Exception as exc:
                 output = json.dumps({"error": "Core tool failed: " + type(exc).__name__})
