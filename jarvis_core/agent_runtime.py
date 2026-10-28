@@ -135,7 +135,7 @@ def _session_instance():
     return _session
 
 
-async def agent_reply(text: str) -> str:
+async def agent_reply(text: str, *, allow_reboot: bool = True) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
     from agents import Agent, Runner, FunctionTool, ModelSettings
 
@@ -159,7 +159,8 @@ async def agent_reply(text: str) -> str:
         name="Jarvis",
         model=settings.agent_model,
         instructions=baseline_context(),
-        tools=[make_tool(spec) for spec in tool_schemas()],
+        tools=[make_tool(spec) for spec in tool_schemas()
+               if allow_reboot or spec["name"] != "reboot_pi"],
         model_settings=ModelSettings(parallel_tool_calls=False),
     )
     # All interfaces share one continuing conversation; serialize runs to avoid
