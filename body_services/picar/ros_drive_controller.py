@@ -46,7 +46,7 @@ class RosDriveController(Node):
         self.declare_parameter("min_turn_speed_mps", 0.005)
         self.declare_parameter("cmd_timeout_s", 0.5)
         self.declare_parameter("max_motor_power", 20)  # PiCar-X API units, NOT m/s
-        self.declare_parameter("steering_sign", 1)  # verify polarity with wheels lifted
+        self.declare_parameter("steering_sign", -1)  # measured: negative flips PiCar servo to ROS left-positive
         self.hardware_enabled = hardware_enabled
         self.hw = None
         self.last_valid_at = None
