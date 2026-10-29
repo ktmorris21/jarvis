@@ -40,7 +40,7 @@ def convert_command(v, omega, wheelbase, max_v, max_steer, min_turn_v):
 class RosDriveController(Node):
     def __init__(self, hardware_enabled=False):
         super().__init__("jarvis_drive_controller")
-        self.declare_parameter("wheelbase_m", 0.135)  # measure before floor operation
+        self.declare_parameter("wheelbase_m", 0.0936625)  # measured 3-11/16 in axle-center wheelbase
         self.declare_parameter("max_linear_mps", 0.12)  # provisional; not measured
         self.declare_parameter("max_steering_deg", 30.0)
         self.declare_parameter("min_turn_speed_mps", 0.005)
