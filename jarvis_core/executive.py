@@ -134,16 +134,8 @@ async def respond_to_user_speech(text: str, source: str):
 async def deliver_agent_speech(reply: str, source: str):
     connection = state.interfaces.get(source)
     data = {"text": reply}
-    if connection and "audio_output" in connection.capabilities:
-        try:
-            data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
-        except Exception:
-            # Do not silently ship an unplayable text-only command to the Pi.
-            # Preserve the text response for diagnostics, but do not pretend
-            # voice playback succeeded.
-            import logging
-            logging.getLogger(__name__).exception("Voice synthesis failed")
-            return
+    # The Pi's Piper engine renders the exact Agent SDK text locally.
+    # Do not synthesize audio on Railway.
     target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
     await send_command(Command(target=target, ability="speaker", data=data))
     state.last_interaction = utc_now()
