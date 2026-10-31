@@ -262,6 +262,35 @@ async def play_audio(encoded):
         os.unlink(path)
 
 
+async def play_piper(text):
+    """Render one phrase locally using an installed Piper voice."""
+    voice = os.environ.get("JARVIS_PIPER_VOICE", "/home/shadowfax/jarvis/voices/en_GB-alan-medium.onnx")
+    if not text.strip():
+        raise ValueError("Empty TTS text")
+    if not os.path.isfile(voice) or not os.path.isfile(voice + ".json"):
+        raise FileNotFoundError("Piper voice model/config missing: " + voice)
+    binary = os.environ.get("JARVIS_PIPER_BIN", "/home/shadowfax/jarvis/.venv-voice/bin/piper")
+    if not os.path.isfile(binary):
+        raise FileNotFoundError("Piper binary not installed: " + binary)
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            binary, "--model", voice, "--output_file", path,
+            stdin=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate((text.strip() + "\\n").encode())
+        if proc.returncode:
+            raise RuntimeError("Piper failed: " + stderr.decode(errors="replace")[:500])
+        player = await asyncio.create_subprocess_exec("aplay", "-q", "-D", DEVICE, path)
+        if await player.wait():
+            raise RuntimeError("Piper audio playback failed")
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
 async def receive_commands(ws, response_finished, head):
     async for raw in ws:
         msg = json.loads(raw)
@@ -290,11 +319,11 @@ async def receive_commands(ws, response_finished, head):
 
         try:
             encoded = data.get("audio_wav_base64")
-            if not encoded:
-                raise ValueError("Speaker command has no audio")
-
             await head.set("speaking")
-            await play_audio(encoded)
+            if encoded:
+                await play_audio(encoded)
+            else:
+                await play_piper(data.get("text", ""))
 
         except Exception as exc:
             status = "failed"
