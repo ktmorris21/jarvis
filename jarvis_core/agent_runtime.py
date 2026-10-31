@@ -174,9 +174,9 @@ async def agent_reply(text: str) -> str:
         log.warning("[VOICE PROFILE] agent_queue=%.3fs", run_started - queued_at)
         try:
             result = await asyncio.wait_for(
-            Runner.run(agent, text, session=_session_instance(),
-                       max_turns=settings.agent_max_turns),
-            timeout=settings.agent_timeout_seconds,
+                Runner.run(agent, text, session=_session_instance(),
+                           max_turns=settings.agent_max_turns),
+                timeout=settings.agent_timeout_seconds,
             )
         finally:
             log.warning("[VOICE PROFILE] agent_run=%.3fs (includes tool calls)", time.perf_counter() - run_started)
