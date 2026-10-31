@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     vision_model: str = "gpt-5.6-luna"
     database_url: str = "sqlite:///./jarvis.db"
     stt_model: str = "gpt-transcribe"
-    tts_model: str = "eleven_flash_v2_5"
-    tts_voice: str = ""
-    elevenlabs_api_key: str | None = None
     humor_level: int = 75
     sarcasm_level: int = 65
     tts_instructions: str = (
@@ -34,5 +31,3 @@ class Settings(BaseSettings):
 settings = Settings()
 settings.openai_api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
 settings.database_url = os.getenv("DATABASE_URL", settings.database_url)
-
-settings.elevenlabs_api_key = settings.elevenlabs_api_key or os.getenv("ELEVENLABS_API_KEY")
