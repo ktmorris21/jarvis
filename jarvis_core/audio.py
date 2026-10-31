@@ -1,4 +1,4 @@
-"""Speech transcription on Core. TTS synthesis is local to the Pi via Piper."""
+"""Speech transcription and optional ElevenLabs synthesized speech on Core."""
 import base64
 import io
 import re
@@ -42,33 +42,48 @@ class AudioService:
             logger.info("[AUDIO TIMING] STT %.2fs", time.perf_counter() - start)
 
     async def synthesize_wav_base64(self, text: str) -> str:
-        """Remote synthesis to PCM, packaged in a WAV container for Pi playback."""
+        """Request a real WAV and validate it before sending to the Pi."""
         if not settings.elevenlabs_api_key:
             raise RuntimeError("ElevenLabs API key not configured")
         spoken = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", text)
         spoken = re.sub(r"(?m)^\\s{0,3}#{1,6}\\s+", "", spoken)
-        spoken = re.sub(r"(?m)^\\s*[-*]\\s+", "", spoken)
+        spoken = re.sub(r"(?m)^\\s*[-*]\\s+", "", spoken).strip()
+        if not spoken:
+            raise ValueError("Empty TTS text")
         start = time.perf_counter()
         async with httpx.AsyncClient(timeout=50) as client:
             response = await client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{settings.elevenlabs_voice_id}",
-                params={"output_format": "pcm_16000"},
+                params={"output_format": "wav_16000"},
                 headers={"xi-api-key": settings.elevenlabs_api_key,
-                         "Content-Type": "application/json", "Accept": "audio/pcm"},
-                json={"text": spoken.strip(), "model_id": settings.elevenlabs_model},
+                         "Content-Type": "application/json", "Accept": "audio/wav"},
+                json={"text": spoken, "model_id": settings.elevenlabs_model},
             )
             response.raise_for_status()
-        if not response.content or len(response.content) % 2:
-            raise RuntimeError("ElevenLabs returned invalid PCM audio")
-        out = io.BytesIO()
-        with wave.open(out, "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(16000)
-            wav.writeframes(response.content)
-        logger.info("[AUDIO TIMING] ElevenLabs full synthesis %.2fs",
-                    time.perf_counter() - start)
-        return base64.b64encode(out.getvalue()).decode("ascii")
+        data = response.content
+        try:
+            with wave.open(io.BytesIO(data), "rb") as wav:
+                rate = wav.getframerate()
+                channels = wav.getnchannels()
+                width = wav.getsampwidth()
+                seconds = wav.getnframes() / rate
+        except (wave.Error, EOFError, ValueError, ZeroDivisionError) as exc:
+            raise RuntimeError(
+                "ElevenLabs response is not a valid WAV "
+                f"(content-type={response.headers.get('content-type')}, "
+                f"bytes={len(data)}, magic={data[:12].hex()})"
+            ) from exc
+        logger.info(
+            "[AUDIO TIMING] ElevenLabs synthesis %.2fs; "
+            "WAV %.2fs, %dHz, %dch, %dbit, %d bytes",
+            time.perf_counter() - start, seconds, rate, channels, width * 8, len(data))
+        if rate != 16000 or channels != 1 or width != 2:
+            raise RuntimeError(
+                f"Unexpected ElevenLabs audio format: {rate}Hz, {channels}ch, {width * 8}bit"
+            )
+        if not 0.1 <= seconds <= 30:
+            raise RuntimeError(f"Suspicious ElevenLabs audio duration: {seconds:.1f}s")
+        return base64.b64encode(data).decode("ascii")
 
 
 audio = AudioService()
