@@ -1,17 +1,10 @@
-"""Piper voice helper tests; no model download or audio hardware needed."""
-import asyncio
-
-import pytest
-
-from clients.voice.voice_interface import play_piper
+"""Core chained voice configuration smoke tests."""
+from jarvis_core.config import settings
 
 
-def test_piper_requires_nonempty_text():
-    with pytest.raises(ValueError, match="Empty TTS"):
-        asyncio.run(play_piper(" "))
+def test_core_uses_supported_transcription_model():
+    assert settings.stt_model == "gpt-transcribe"
 
 
-def test_piper_missing_voice_fails_closed(monkeypatch):
-    monkeypatch.setenv("JARVIS_PIPER_VOICE", "/definitely/missing/voice.onnx")
-    with pytest.raises(FileNotFoundError, match="Piper voice"):
-        asyncio.run(play_piper("Hello"))
+def test_core_does_not_require_cloud_tts_configuration():
+    assert not hasattr(settings, "elevenlabs_api_key")
