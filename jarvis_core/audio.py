@@ -45,9 +45,10 @@ class AudioService:
         """Request a real WAV and validate it before sending to the Pi."""
         if not settings.elevenlabs_api_key:
             raise RuntimeError("ElevenLabs API key not configured")
-        spoken = re.sub(r"\\*\\*(.*?)\\*\\*", r"\\1", text)
-        spoken = re.sub(r"(?m)^\\s{0,3}#{1,6}\\s+", "", spoken)
-        spoken = re.sub(r"(?m)^\\s*[-*]\\s+", "", spoken).strip()
+        spoken = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+        spoken = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", spoken)
+        spoken = re.sub(r"(?m)^\s*[-*]\s+", "", spoken).strip()
+        logger.info("[AUDIO TTS] cleaned input length=%d preview=%r", len(spoken), spoken[:120])
         if not spoken:
             raise ValueError("Empty TTS text")
         start = time.perf_counter()
