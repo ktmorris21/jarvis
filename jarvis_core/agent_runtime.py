@@ -18,6 +18,9 @@ log = logging.getLogger(__name__)
 _turn_lock = asyncio.Lock()
 _pending_status: dict[str, asyncio.Future] = {}
 _session = None
+# New conversation context boundary; existing event and memory records are retained.
+CONVERSATION_RESET_AT = datetime.fromisoformat("2026-10-31T21:00:22+00:00")
+SESSION_ID = "jarvis-primary-after-20261031-reset"
 
 
 def baseline_context(*, include_recent_voice: bool = True, robot_status_context: dict | None = None) -> str:
@@ -38,7 +41,8 @@ def baseline_context(*, include_recent_voice: bool = True, robot_status_context:
     # so desktop can resolve references from PiCar conversations as well.
     try:
         voice_turns = [t for t in repository.recent_conversation_turns(limit=32, hours=24)
-                       if t.get("source") == "picar:realtime"][-12:] if include_recent_voice else []
+                       if t.get("source") == "picar:realtime"
+                       and datetime.fromisoformat(t["at"]) >= CONVERSATION_RESET_AT][-12:] if include_recent_voice else []
     except Exception:
         # Conversation context is helpful, but must never prevent Core answering.
         log.exception("Could not load recent voice context")
@@ -133,7 +137,7 @@ def _session_instance():
         elif not (url.startswith("postgresql+asyncpg://") or
                   url.startswith("sqlite+aiosqlite://")):
             raise ValueError("Agent session requires PostgreSQL or SQLite database")
-        _session = SQLAlchemySession.from_url("jarvis-primary", url=url, create_tables=True)
+        _session = SQLAlchemySession.from_url(SESSION_ID, url=url, create_tables=True)
     return _session
 
 
