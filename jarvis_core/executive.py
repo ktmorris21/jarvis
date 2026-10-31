@@ -134,8 +134,15 @@ async def respond_to_user_speech(text: str, source: str):
 async def deliver_agent_speech(reply: str, source: str):
     connection = state.interfaces.get(source)
     data = {"text": reply}
-    # The Pi's Piper engine renders the exact Agent SDK text locally.
-    # Do not synthesize audio on Railway.
+    if settings.tts_provider == "elevenlabs" and connection and "audio_output" in connection.capabilities:
+        try:
+            data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("ElevenLabs synthesis failed")
+            # Fail visibly rather than unexpectedly switching back to slow Piper.
+            return
+    # Piper remains available when deliberately configured as the TTS provider.
     target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
     await send_command(Command(target=target, ability="speaker", data=data))
     state.last_interaction = utc_now()
