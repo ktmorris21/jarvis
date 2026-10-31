@@ -1,5 +1,5 @@
 """Unit coverage for the independent chained-voice codec boundary."""
-import base64
+import asyncio
 import io
 import wave
 
@@ -26,9 +26,8 @@ def test_pcm16_rejects_empty_or_misaligned_response():
         pcm16_to_wav(b"\x00")
 
 
-@pytest.mark.asyncio
-async def test_tts_refuses_missing_credentials(monkeypatch):
+def test_tts_refuses_missing_credentials(monkeypatch):
     monkeypatch.setattr(settings, "elevenlabs_api_key", None)
     monkeypatch.setattr(settings, "tts_voice", "")
     with pytest.raises(RuntimeError, match="ElevenLabs TTS requires"):
-        await AudioService().synthesize_wav_base64("Hello")
+        asyncio.run(AudioService().synthesize_wav_base64("Hello"))
