@@ -280,7 +280,7 @@ async def play_piper(text):
             stdin=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate((text.strip() + "\\n").encode())
+        _, stderr = await proc.communicate((text.strip() + "\n").encode())
         if proc.returncode:
             raise RuntimeError("Piper failed: " + stderr.decode(errors="replace")[:500])
         player = await asyncio.create_subprocess_exec("aplay", "-q", "-D", DEVICE, path)
