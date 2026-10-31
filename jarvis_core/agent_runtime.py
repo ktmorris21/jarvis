@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from .config import settings
@@ -143,6 +144,7 @@ async def agent_reply(text: str) -> str:
         name = spec["name"]
 
         async def invoke(ctx, raw_arguments):
+            tool_started = time.perf_counter()
             try:
                 arguments = json.loads(raw_arguments or "{}")
                 result = await execute_tool(name, arguments)
@@ -150,6 +152,8 @@ async def agent_reply(text: str) -> str:
             except Exception as exc:
                 log.warning("Core tool %s failed: %s", name, type(exc).__name__)
                 return json.dumps({"available": False, "error": str(exc)})
+            finally:
+                log.warning("[VOICE PROFILE] tool=%s duration=%.3fs", name, time.perf_counter() - tool_started)
 
         return FunctionTool(name=name, description=spec["description"],
                             params_json_schema=spec["parameters"],
@@ -164,12 +168,18 @@ async def agent_reply(text: str) -> str:
     )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
+    queued_at = time.perf_counter()
     async with _turn_lock:
-        result = await asyncio.wait_for(
+        run_started = time.perf_counter()
+        log.warning("[VOICE PROFILE] agent_queue=%.3fs", run_started - queued_at)
+        try:
+            result = await asyncio.wait_for(
             Runner.run(agent, text, session=_session_instance(),
                        max_turns=settings.agent_max_turns),
             timeout=settings.agent_timeout_seconds,
-        )
+            )
+        finally:
+            log.warning("[VOICE PROFILE] agent_run=%.3fs (includes tool calls)", time.perf_counter() - run_started)
     speech = str(result.final_output or "").strip()
     if not speech:
         raise RuntimeError("Agent produced an empty response")
