@@ -1,44 +1,42 @@
-# Jarvis Agent SDK chained voice — staged cutover
+# Jarvis chained voice with local Piper — staged migration
 
-## Design
+## Architecture
+Pi: local Hey Jarvis wake-word, microphone capture, Piper TTS, Jabra speaker.
+Railway: OpenAI gpt-transcribe -> existing Agents SDK conversation with identity,
+memory, tools and SQLAlchemy session -> text command to Pi. Piper speaks the
+Agent SDK's exact text. No ElevenLabs account or cloud TTS required.
 
-Local Pi: `Hey Jarvis` wake word + VAD capture, Jabra microphone/speaker.
-Railway Core: `/audio/utterance` -> OpenAI `gpt-transcribe` -> existing
-`agent_runtime.agent_reply` (persistent SQLAlchemy session, Core tools,
-identity, memory) -> ElevenLabs Flash TTS -> existing `speaker` WebSocket
-command. The Pi plays the exact Agent SDK response.
+## Install on Shadowfax (64-bit Ubuntu 24.04)
 
-This does **not** use OpenAI Realtime for conversation. The model and speech
-providers have separate responsibilities. It retains the old voice listener,
-so no duplicate listener should be started on the same microphone.
-
-Why ElevenLabs? OpenAI's standalone `/v1/audio/speech` TTS models are
-scheduled for removal in January 2027; there is no currently documented
-long-term standalone drop-in replacement. ElevenLabs' TTS API is independent
-of that deprecation. No provider can promise that individual model IDs will
-never change. The TTS provider boundary lives in `jarvis_core/audio.py`.
-
-## Required Railway environment settings
-
-* `OPENAI_API_KEY`: existing OpenAI credential.
-* `JARVIS_STT_MODEL=gpt-transcribe`
-* `JARVIS_AGENT_MODEL`: keep the current working Agent SDK model.
-* `JARVIS_ELEVENLABS_API_KEY` (or `ELEVENLABS_API_KEY`): private ElevenLabs key.
-* `JARVIS_TTS_VOICE`: the ElevenLabs voice ID selected by the user.
-* `JARVIS_TTS_MODEL=eleven_flash_v2_5` (default).
-
-Do not commit credentials. `JARVIS_TTS_VOICE` is required and intentionally
-has no default: do not silently change Jarvis's character by selecting a
-random synthetic voice.
-
-## Deployment sequence (only AFTER Railway credentials are configured)
-
-1. Merge this branch and deploy Core on Railway. The old Realtime listener
-   continues to work independently.
-2. On the Pi, run:
+Prepare a local Piper installation in the existing voice virtual environment:
 
 ```bash
-cd /home/shadowfax/jarvis
+cd ~/jarvis
+.venv-voice/bin/python -m pip install 'piper-tts>=1.8,<2'
+mkdir -p voices
+.venv-voice/bin/python -m piper.download_voices --data-dir voices en_GB-alan-medium
+printf 'LiDAR is online.\n' | .venv-voice/bin/piper \
+  --model "$HOME/jarvis/voices/en_GB-alan-medium.onnx" \
+  --output_file /tmp/jarvis-piper-test.wav
+aplay -D plughw:CARD=J710,DEV=0 /tmp/jarvis-piper-test.wav
+```
+
+The first suggested voice is the British English Alan medium voice. Compare
+alternatives later. Check the model's licensing documentation before distribution.
+The Piper model requires both the .onnx file and its .onnx.json companion.
+
+Configure any nonstandard binary/model using JARVIS_PIPER_BIN and
+JARVIS_PIPER_VOICE in /etc/jarvis/voice.env.
+
+## Core prerequisites
+Deploy the branch to Railway with OPENAI_API_KEY and
+JARVIS_STT_MODEL=gpt-transcribe. Keep existing JARVIS_AGENT_MODEL and database
+settings unchanged. There is no TTS provider configuration on Railway.
+
+## Cut over only after confirming local Piper playback and deployed Core
+
+```bash
+cd ~/jarvis
 git pull --ff-only
 sudo install -m 0644 deploy/systemd/jarvis-agents-voice.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -48,25 +46,22 @@ sudo systemctl enable --now jarvis-agents-voice.service
 journalctl -u jarvis-agents-voice.service -f
 ```
 
-3. Say "Hey Jarvis, what's your LiDAR status?" and watch Core's STT/TTS
-   timing logs. Confirm speaker output and tool execution. Test multiple turns.
-4. Roll back voice immediately if needed:
-
+Rollback:
 ```bash
 sudo systemctl disable --now jarvis-agents-voice.service
 sudo systemctl enable --now jarvis-realtime.service
 ```
 
-## Known limitations
+## Current behavior and next optimization
 
-* This is the **initial functional cutover**, not a low-latency streaming
-  implementation. TTS generation finishes before the existing `speaker`
-  command starts playback. Latency will likely be longer than Realtime.
-* Follow-up without another wake word, local cached acknowledgement clips,
-  streamed TTS playback, and interruptions can be layered on afterward.
-* Existing boot greeting belongs to the Realtime client and is not part of
-  this staged listener. It can be added locally without using deprecated TTS.
-* When synthesis fails, Core logs an explicit error rather than sending an
-  unplayable speaker command.
-* Test the chosen voice, pronunciation, audio levels and ElevenLabs account
-  rate limits before treating this as production ready.
+The staged listener synthesizes the complete Agent SDK answer in Piper before
+playback. That is functional but not yet first-sentence streaming. We should
+implement and test streamed text transport from Runner.run_streamed() to the Pi,
+a sentence playback queue, and a final-turn marker before using streaming
+in production. Do not mistake token deltas from a tool-call intermediate turn
+for a final user-facing answer. Preserve the session lock and reliable completion.
+
+Known follow-ups: immediate locally cached wake acknowledgement; wake-free
+follow-ups; interruption, TTS preloading, first-sentence latency instrumentation;
+restore the separate boot greeting. Realtime and chained listener must never
+own the microphone simultaneously.
