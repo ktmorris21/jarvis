@@ -138,7 +138,12 @@ async def deliver_agent_speech(reply: str, source: str):
         try:
             data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
         except Exception:
-            pass
+            # Do not silently ship an unplayable text-only command to the Pi.
+            # Preserve the text response for diagnostics, but do not pretend
+            # voice playback succeeded.
+            import logging
+            logging.getLogger(__name__).exception("Voice synthesis failed")
+            return
     target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
     await send_command(Command(target=target, ability="speaker", data=data))
     state.last_interaction = utc_now()
