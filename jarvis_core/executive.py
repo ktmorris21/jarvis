@@ -110,7 +110,6 @@ async def respond_to_user_speech(text: str, source: str):
             turn_id=uuid4().hex, role="user", text=text, input_mode="text",
         )
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("Could not record desktop user turn")
 
     try:
@@ -123,7 +122,6 @@ async def respond_to_user_speech(text: str, source: str):
         finally:
             logging.getLogger(__name__).warning("[VOICE PROFILE] agent_total=%.3fs", time.perf_counter() - agent_started)
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("Agent conversation failed")
         reply = "My OpenAI agent is unavailable. Please check my Core logs; I did not use a backup cognition system."
     try:
@@ -132,7 +130,6 @@ async def respond_to_user_speech(text: str, source: str):
             turn_id=uuid4().hex, role="assistant", text=reply, input_mode="text",
         )
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("Could not record desktop assistant turn")
     await deliver_agent_speech(reply, source)
 
