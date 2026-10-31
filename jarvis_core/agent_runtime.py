@@ -138,8 +138,8 @@ def _session_instance():
 
 async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
-    from agents import Agent, Runner, FunctionTool, ModelSettings
-    from openai.types.shared import Reasoning, RunHooks
+    from agents import Agent, Runner, FunctionTool, ModelSettings, RunHooks
+    from openai.types.shared import Reasoning
 
     class ModelTimingHooks(RunHooks):
         def __init__(self):
