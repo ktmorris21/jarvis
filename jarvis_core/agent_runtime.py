@@ -138,7 +138,26 @@ def _session_instance():
 
 async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
-    from agents import Agent, Runner, FunctionTool, ModelSettings
+    from agents import Agent, Runner, FunctionTool, ModelSettings, RunHooks
+
+    class ModelTimingHooks(RunHooks):
+        def __init__(self):
+            self.calls = 0
+            self.started = None
+            self.total = 0.0
+
+        async def on_llm_start(self, context, agent, system_prompt, input_items):
+            self.calls += 1
+            self.started = time.perf_counter()
+            log.warning("[VOICE PROFILE] llm_call=%d started model=%s", self.calls, agent.model)
+
+        async def on_llm_end(self, context, agent, response):
+            if self.started is not None:
+                elapsed = time.perf_counter() - self.started
+                self.total += elapsed
+                log.warning("[VOICE PROFILE] llm_call=%d duration=%.3fs", self.calls, elapsed)
+                self.started = None
+
 
     def make_tool(spec):
         name = spec["name"]
@@ -168,18 +187,19 @@ async def agent_reply(text: str) -> str:
     )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
+    hooks = ModelTimingHooks()
     queued_at = time.perf_counter()
     async with _turn_lock:
         run_started = time.perf_counter()
         log.warning("[VOICE PROFILE] agent_queue=%.3fs", run_started - queued_at)
         try:
             result = await asyncio.wait_for(
-                Runner.run(agent, text, session=_session_instance(),
+                Runner.run(agent, text, session=_session_instance(), hooks=hooks,
                            max_turns=settings.agent_max_turns),
                 timeout=settings.agent_timeout_seconds,
             )
         finally:
-            log.warning("[VOICE PROFILE] agent_run=%.3fs (includes tool calls)", time.perf_counter() - run_started)
+            log.warning("[VOICE PROFILE] agent_run=%.3fs (includes tool calls); llm_calls=%d llm_total=%.3fs", time.perf_counter() - run_started, hooks.calls, hooks.total)
     speech = str(result.final_output or "").strip()
     if not speech:
         raise RuntimeError("Agent produced an empty response")
