@@ -1,4 +1,6 @@
 import asyncio
+import time
+import logging
 from uuid import uuid4
 from datetime import datetime,timezone
 from .attention import attention,Disposition
@@ -115,7 +117,11 @@ async def respond_to_user_speech(text: str, source: str):
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         from .agent_runtime import agent_reply
-        reply = await agent_reply(text)
+        agent_started = time.perf_counter()
+        try:
+            reply = await agent_reply(text)
+        finally:
+            logging.getLogger(__name__).warning("[VOICE PROFILE] agent_total=%.3fs", time.perf_counter() - agent_started)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Agent conversation failed")
@@ -136,7 +142,11 @@ async def deliver_agent_speech(reply: str, source: str):
     data = {"text": reply}
     if settings.tts_provider == "elevenlabs" and connection and "audio_output" in connection.capabilities:
         try:
-            data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
+            tts_started = time.perf_counter()
+            try:
+                data["audio_wav_base64"] = await audio.synthesize_wav_base64(reply)
+            finally:
+                logging.getLogger(__name__).warning("[VOICE PROFILE] elevenlabs_total=%.3fs", time.perf_counter() - tts_started)
         except Exception:
             import logging
             logging.getLogger(__name__).exception("ElevenLabs synthesis failed")
@@ -144,7 +154,9 @@ async def deliver_agent_speech(reply: str, source: str):
             return
     # Piper remains available when deliberately configured as the TTS provider.
     target = source if connection and ("speaker" in connection.capabilities or "audio_output" in connection.capabilities) else None
-    await send_command(Command(target=target, ability="speaker", data=data))
+    dispatch_started = time.perf_counter()
+    sent, route = await send_command(Command(target=target, ability="speaker", data=data))
+    logging.getLogger(__name__).warning("[VOICE PROFILE] speaker_dispatch=%.3fs sent=%s route=%s wav_bytes_base64=%d", time.perf_counter() - dispatch_started, sent, route, len(data.get("audio_wav_base64", "")))
     state.last_interaction = utc_now()
     state.persist_runtime()
 
