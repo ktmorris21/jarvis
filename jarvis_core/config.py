@@ -16,9 +16,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     vision_model: str = "gpt-5.6-luna"
     database_url: str = "sqlite:///./jarvis.db"
-    stt_model: str = "gpt-4o-mini-transcribe"
-    tts_model: str = "gpt-4o-mini-tts"
-    tts_voice: str = "onyx"
+    stt_model: str = "gpt-transcribe"
     humor_level: int = 75
     sarcasm_level: int = 65
     tts_instructions: str = (
