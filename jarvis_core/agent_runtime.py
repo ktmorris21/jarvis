@@ -206,7 +206,8 @@ async def agent_reply(text: str) -> str:
         name="Jarvis",
         model=settings.agent_model,
         instructions=baseline_context(robot_status_context=robot_status_context),
-        tools=[make_tool(spec) for spec in tool_schemas() if spec["name"] != "get_robot_status"],
+        tools=[make_tool(spec) for spec in tool_schemas()
+               if spec["name"] not in {"get_robot_status", "get_lidar_service"}],
         model_settings=ModelSettings(
             parallel_tool_calls=False,
             reasoning=Reasoning(effort=settings.agent_reasoning_effort),
