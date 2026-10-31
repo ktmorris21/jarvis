@@ -244,17 +244,22 @@ async def listen_for_command(model, head):
 
 
 async def play_audio(encoded):
+    started = time.monotonic()
     data = base64.b64decode(encoded)
+    print(f"[VOICE PROFILE] wav_decode={time.monotonic()-started:.3f}s bytes={len(data)}", flush=True)
 
     fd, path = tempfile.mkstemp(suffix=".wav")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
 
+        prepared = time.monotonic()
+        print(f"[VOICE PROFILE] wav_file_prepare={prepared-started:.3f}s", flush=True)
         proc = await asyncio.create_subprocess_exec(
             "aplay", "-q", "-D", DEVICE, path
         )
         rc = await proc.wait()
+        print(f"[VOICE PROFILE] aplay_elapsed={time.monotonic()-prepared:.3f}s", flush=True)
 
         if rc:
             print(f"Speaker playback failed: {rc}")
@@ -313,6 +318,7 @@ async def receive_commands(ws, response_finished, head):
             flush=True,
         )
         print("\nJARVIS:", data.get("text", ""), flush=True)
+        print(f"[VOICE PROFILE] speaker_ws_receive={time.monotonic()-response_finished.sent_at:.3f}s", flush=True)
 
         status = "complete"
         error = None
