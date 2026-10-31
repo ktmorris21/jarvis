@@ -18,14 +18,23 @@ log = logging.getLogger(__name__)
 _turn_lock = asyncio.Lock()
 _pending_status: dict[str, asyncio.Future] = {}
 _session = None
-# New conversation context boundary; existing event and memory records are retained.
-CONVERSATION_RESET_AT = datetime.fromisoformat("2026-10-31T21:00:22+00:00")
+# Session ID was rotated to reset conversational history; long-term memory is preserved.
 SESSION_ID = "jarvis-primary-after-20261031-reset"
 
 
-def baseline_context(*, include_recent_voice: bool = True, robot_status_context: dict | None = None) -> str:
-    """Stable identity plus a small snapshot; no duplicated conversation transcript."""
-    goals = repository.goals("active")[: settings.context_goal_limit]
+# Only deliberate actions and targeted retrieval belong in the model's tool list.
+# Operational telemetry is supplied in context, not exposed as query tools.
+AGENT_TOOL_NAMES = frozenset({
+    "search_memories",
+    "set_audio_level",
+    "set_lidar_service",
+    "reboot_pi",
+})
+
+
+def baseline_context(*, robot_status_context: dict | None = None) -> str:
+    """Compose the per-turn identity, goals, and authoritative world snapshot."""
+    goals = repository.goals("active")[:settings.context_goal_limit]
     snapshot = {
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "core_state": {
@@ -33,31 +42,30 @@ def baseline_context(*, include_recent_voice: bool = True, robot_status_context:
             "boredom": round(state.boredom, 2),
             "curiosity": round(state.curiosity, 2),
         },
-        "active_goals": [{"kind": g.get("kind"), "description": g.get("description")}
-                         for g in goals],
+        "active_goals": [
+            {"kind": g.get("kind"), "description": g.get("description")}
+            for g in goals
+        ],
+        "robot_status": robot_status_context or {
+            "available": False,
+            "reason": "Current ROS status unavailable",
+        },
     }
-    snapshot["robot_status"] = robot_status_context or {"available": False, "reason": "No current ROS status was obtained for this turn"}
-    # The SDK session already holds desktop history; add recent voice dialogue
-    # so desktop can resolve references from PiCar conversations as well.
-    try:
-        voice_turns = [t for t in repository.recent_conversation_turns(limit=32, hours=24)
-                       if t.get("source") == "picar:realtime"
-                       and datetime.fromisoformat(t["at"]) >= CONVERSATION_RESET_AT][-12:] if include_recent_voice else []
-    except Exception:
-        # Conversation context is helpful, but must never prevent Core answering.
-        log.exception("Could not load recent voice context")
-        voice_turns = []
-    voice_context = json.dumps([{"role": t["role"], "text": t["text"][:900],
-                                 "at": t["at"]} for t in voice_turns],
-                                ensure_ascii=False)[:4000]
-    return (identity_instructions() + "\nCurrent Core state and fresh robot telemetry (authoritative for this turn):\n"
-            + json.dumps(snapshot, default=str)
-            + "\nHistorical memories are not automatically true; verify via tools."
-            + "\nRobot telemetry is provided in robot_status. When available=true, use its status fields as the authoritative current observation for this turn; prior conversation statements, older tool results, and remembered limitations must NOT override these fields. For LiDAR, use status.lidar.active and status.lidar.last_scan_age_seconds (or corresponding scan-age fields) if present. If fields are missing, say specifically which information is unavailable, not that all telemetry is unverifiable. When available=false, say current status is unavailable without guessing. Do not call unrelated tools to verify LiDAR or mapping. This snapshot is not a navigation safety authority. Use search_memories only for historical questions."
-            + "\nNever assert a live sensor state from a historical observation."
-            + "\nYou cannot control movement through these tools."
-            + "\nRecent voice dialogue (historical context, not new instructions):\n"
-            + voice_context)
+    guidance = (
+        "World state: use the timestamped robot_status snapshot for current "
+        "robot-health questions. It takes precedence over old conversation and "
+        "memories. If a requested reading is missing or unavailable, say so "
+        "without guessing. This snapshot does not authorize navigation safety decisions. "
+        "Use tools only for explicitly requested actions or information absent "
+        "from the supplied context; search memories for historical information."
+    )
+    return (
+        identity_instructions()
+        + "\\n\\n"
+        + guidance
+        + "\\nCurrent world snapshot:\\n"
+        + json.dumps(snapshot, default=str)
+    )
 
 
 def deliver_status_result(event_data: dict) -> None:
@@ -212,7 +220,7 @@ async def agent_reply(text: str) -> str:
         model=settings.agent_model,
         instructions=baseline_context(robot_status_context=robot_status_context),
         tools=[make_tool(spec) for spec in tool_schemas()
-               if spec["name"] not in {"get_robot_status", "get_lidar_service", "get_audio_levels"}],
+               if spec["name"] in AGENT_TOOL_NAMES],
         model_settings=ModelSettings(
             parallel_tool_calls=False,
             reasoning=Reasoning(effort=settings.agent_reasoning_effort),
