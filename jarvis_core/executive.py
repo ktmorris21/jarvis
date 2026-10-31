@@ -145,7 +145,7 @@ async def deliver_agent_speech(reply: str, source: str):
             finally:
                 logging.getLogger(__name__).warning("[VOICE PROFILE] elevenlabs_total=%.3fs", time.perf_counter() - tts_started)
         except Exception:
-            import logging
+
             logging.getLogger(__name__).exception("ElevenLabs synthesis failed")
             # Fail visibly rather than unexpectedly switching back to slow Piper.
             return
