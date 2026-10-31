@@ -138,7 +138,8 @@ def _session_instance():
 
 async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
-    from agents import Agent, Runner, FunctionTool, ModelSettings, RunHooks
+    from agents import Agent, Runner, FunctionTool, ModelSettings
+    from openai.types.shared import Reasoning, RunHooks
 
     class ModelTimingHooks(RunHooks):
         def __init__(self):
@@ -178,12 +179,18 @@ async def agent_reply(text: str) -> str:
                             params_json_schema=spec["parameters"],
                             on_invoke_tool=invoke, strict_json_schema=False)
 
+    if settings.agent_reasoning_effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("Unsupported JARVIS_AGENT_REASONING_EFFORT")
+    log.warning("[VOICE PROFILE] model=%s reasoning_effort=%s", settings.agent_model, settings.agent_reasoning_effort)
     agent = Agent(
         name="Jarvis",
         model=settings.agent_model,
         instructions=baseline_context(),
         tools=[make_tool(spec) for spec in tool_schemas()],
-        model_settings=ModelSettings(parallel_tool_calls=False),
+        model_settings=ModelSettings(
+            parallel_tool_calls=False,
+            reasoning=Reasoning(effort=settings.agent_reasoning_effort),
+        ),
     )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
