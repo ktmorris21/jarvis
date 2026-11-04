@@ -100,3 +100,53 @@ behavior, and reverse obstacle coverage need real-hardware validation.
 4. For rollback: revert the two options to `DUBIN` and `allow_reversing: false`,
    remove the optional `reverse_penalty`, then restart `jarvis-nav2.service`.
 
+
+
+## Frontier exploration sprint — milestone 1: read-only detection
+
+The existing `jarvis-nav2.service` now also launches
+`ops/nav2/frontier_detector.py`. It subscribes to the live
+`/map` OccupancyGrid from slam_toolbox and publishes RViz
+`visualization_msgs/MarkerArray` on:
+
+```text
+/jarvis/exploration/frontiers
+```
+
+**No motor command, Nav2 goal, or Agent tool is created in milestone 1.**
+Orange spheres indicate one representative observed free cell in each
+frontier cluster; turquoise points show the free/unknown boundary.
+These are visualization candidates, NOT vetted Ackermann-reachable
+Nav2 destinations. Clusters smaller than six cells are ignored; up to
+40 largest are displayed. Frontier cells require observed free occupancy
+at most 20 and a four-connected unknown neighbor. A scan of the grid
+runs no more often than once per three seconds and only on new map data.
+
+### Deploy (no extra services or long-lived terminals)
+
+```bash
+cd ~/jarvis
+git pull --ff-only
+python3 -m py_compile ops/nav2/frontier_detector.py ops/nav2/navigation.launch.py
+sudo systemctl restart jarvis-nav2.service
+sudo systemctl status jarvis-nav2.service --no-pager
+```
+
+RViz: **Add -> By topic -> /jarvis/exploration/frontiers -> MarkerArray**
+(or add a MarkerArray display and set the topic yourself).
+Use **Fixed Frame = map** for frontier markers in map coordinates.
+An RViz TF display issue can hide markers even if the topic is publishing;
+read-only markers never change the planner or costmaps.
+The marker publisher is transient-local, so opening RViz later should
+receive the most recent marker batch.
+
+For occasional troubleshooting (no persistent terminal needed):
+
+```bash
+journalctl -u jarvis-nav2.service -n 60 --no-pager | grep -Ei 'frontier|error|traceback'
+```
+
+Next increment: plan-checked candidate staging points, a bounded
+NavigateToPose exploration loop, explicit stop/cancel and safety gating,
+then asynchronous Agent SDK tools. The actual frontier detector in this
+milestone does not command Jarvis to drive.
