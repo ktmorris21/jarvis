@@ -210,9 +210,9 @@ Only the three requested safeguards are included:
 1. Explicit ROS Trigger services to start, stop, and check status:
    `/jarvis/exploration/start`, `/jarvis/exploration/stop`,
    `/jarvis/exploration/status`.
-   Stop requests Nav2 goal cancellation and motor **disarm** through the
-   existing `/jarvis_drive/set_armed` SetBool service. If the disarm
-   service is unavailable, use the physical motor cutoff.
+   Stop requests cancellation of this explorer's active Nav2 goal. It **never**
+   changes the motor armed state; use the existing dedicated arm/disarm
+   command separately. If Nav2 cannot cancel, use your existing motor cutoff.
 2. On Nav2 goal success, return to frontier selection when new map data
    arrives. On failure, blacklist staging points within 0.40 m of the
    failed point for the session, and select another. Three consecutive
@@ -264,7 +264,7 @@ The explorer immediately begins choosing and executing frontier goals.
 Monitor the robot in person. It can continue indefinitely until frontiers
 are exhausted, a health/failure condition stops it, or you stop it.
 
-To stop from the same terminal (or another available shell):
+To stop from the same terminal (or another available shell), leaving motors armed if already armed:
 
 ```bash
 ros2 service call /jarvis/exploration/stop std_srvs/srv/Trigger "{}"
@@ -279,8 +279,7 @@ ros2 service call /jarvis/exploration/status std_srvs/srv/Trigger "{}"
 If any software cancellation fails, use the existing physical motor
 power cutoff. A service call response confirms the request was received,
 **not** that Nav2 has already acknowledged cancellation and the motors
-have physically stopped. Voice control through the Agent SDK is a future
-increment; no new model-facing movement tool is exposed yet.
+have physically stopped. Voice control is available once both Core and Pi deploy the Agent SDK integration below.
 
 ### Observability
 
@@ -294,3 +293,50 @@ journalctl -u jarvis-nav2.service -n 80 --no-pager | grep -Ei 'exploration|front
 
 This code has been committed but has not been hardware-tested by the
 assistant; first run should be short, supervised, and in a clear area.
+
+
+## Milestone 3 — Agent SDK voice commands (requires Core and Pi deployment)
+
+Core now exposes exactly three zero-argument tools to the Agents SDK:
+`explore()`, `stop_exploring()`, `exploration_status()`.
+All route via Core's authenticated command bus to the existing `picar-ros`
+WebSocket bridge, which forwards them to the three ROS Trigger services.
+The bridge remains separate from the robot's drive controller.
+
+Voice examples, after the motors have been separately armed:
+- "Hey Jarvis, go exploring" -> `explore()` starts the ROS loop and returns immediately.
+- "Jarvis, how is exploration going?" -> `exploration_status()` queries current ROS state.
+- "Jarvis, stop exploring" -> `stop_exploring()` requests cancellation but **does not disarm motors**.
+
+Exploration does not arm or disarm automatically, even when it stops
+due to sensor health, failed goals, or exhausted frontiers. Cancellation
+and loss of /cmd_vel cause the existing drive controller to stop sending
+motor power; the independent arm state remains operator-controlled.
+
+### Deploy
+
+Railway Core must deploy the updated repository version. On the Pi,
+after confirming the cloud deployment, run:
+
+```bash
+cd ~/jarvis
+git pull --ff-only
+python3 -m py_compile ops/nav2/frontier_detector.py body_services/picar/ros_bridge.py
+sudo systemctl restart jarvis-nav2.service
+sudo systemctl restart jarvis-bridge@shadowfax.service
+```
+
+The bridge must reconnect after restart to advertise the three new
+capabilities; until then Core cannot route the tools. Existing offline
+arm/disarm commands require no modification. No new terminal or
+additional service has been introduced. Check Nav2 lifecycle states
+and both costmaps after the Nav2 restart, given our intermittent
+startup order/timing problem.
+
+A successful voice reply confirms the ROS service response, not
+guaranteed physical movement or completed mapping. If stopped while
+Nav2 is driving, controller cancellation is asynchronous; use the
+operator's separate disarm or physical cutoff when immediate cessation
+is required. The autonomous behavior was previously demonstrated
+locally; this new Core-to-ROS voice integration has not yet been
+hardware-tested.
