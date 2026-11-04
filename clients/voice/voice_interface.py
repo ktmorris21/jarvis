@@ -20,6 +20,7 @@ import numpy as np
 import websockets
 from openwakeword.model import Model
 from local_commands import LocalCommands
+from local_audio import play_local_response
 
 
 DEVICE = "plughw:CARD=J710,DEV=0"
@@ -424,7 +425,7 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                 print("[LOCAL]", reply, flush=True)
                 await head.set("speaking")
                 try:
-                    await play_piper(reply)
+                    await play_local_response(reply, device=DEVICE, fallback=play_piper)
                 except Exception as exc:
                     print("[LOCAL] Audio playback failed:", repr(exc), flush=True)
                     power_action = None
@@ -436,7 +437,7 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                     except Exception as exc:
                         print("[LOCAL] System action failed:", repr(exc), flush=True)
                         try:
-                            await play_piper("Power command failed.")
+                            await play_local_response("Power command failed.", device=DEVICE, fallback=play_piper)
                         except Exception:
                             pass
                 continue
