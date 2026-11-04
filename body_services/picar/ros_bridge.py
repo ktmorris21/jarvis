@@ -1,6 +1,6 @@
-"""Read-only ROS 2 status provider for the existing Jarvis Core protocol.
+"""ROS status and operator-requested exploration command bridge to Jarvis Core.
 
-Run inside a ROS Jazzy Python environment (not Railway). No PiCar/motor imports.
+Run inside ROS Jazzy Python on the Pi. No direct motor control or PiCar imports.
 """
 import argparse
 import asyncio
@@ -21,6 +21,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
+from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 import websockets
 
@@ -68,6 +69,14 @@ class RosStatusNode(Node):
         self.create_subscription(OccupancyGrid, map_topic, self._map_callback, map_qos)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.exploration_services = {
+            ability: self.create_client(Trigger, service)
+            for ability, service in {
+                "explore": "/jarvis/exploration/start",
+                "stop_exploring": "/jarvis/exploration/stop",
+                "exploration_status": "/jarvis/exploration/status",
+            }.items()
+        }
 
     def _scan_callback(self, msg):
         with self._lock:
@@ -144,6 +153,26 @@ class RosStatusNode(Node):
         }
 
 
+async def call_exploration_service(node, ability, timeout=5.0):
+    """Request a local ROS Trigger, awaiting the ROS thread's response.
+
+    Keep the Core websocket responsive enough for ordinary control requests;
+    ROS node itself is spun by ros_spin on a separate thread.
+    """
+    client = node.exploration_services[ability]
+    if not client.service_is_ready():
+        return {"success": False, "message": "Exploration ROS service unavailable"}
+    future = client.call_async(Trigger.Request())
+    deadline = time.monotonic() + timeout
+    while not future.done() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    if not future.done():
+        future.cancel()
+        return {"success": False, "message": "Exploration ROS service timed out"}
+    result = future.result()
+    return {"success": bool(result.success), "message": result.message}
+
+
 def ros_spin(node, stop):
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -164,7 +193,7 @@ async def bridge_loop(args, node):
                 await ws.send(json.dumps({
                     "type": "hello", "interface_id": args.interface_id,
                     "interface_type": "ros_status",
-                    "capabilities": ["get_robot_status"],
+                    "capabilities": ["get_robot_status", "explore", "stop_exploring", "exploration_status"],
                 }))
                 reply = json.loads(await ws.recv())
                 if reply.get("type") != "hello_ack":
@@ -175,15 +204,23 @@ async def bridge_loop(args, node):
                     if command.get("type") != "command":
                         continue
                     ability = command.get("ability")
-                    if ability != "get_robot_status":
-                        # Never execute other commands, even if Core sends one.
-                        result, status, error = None, "failed", "unsupported read-only bridge command"
-                    else:
+                    if command.get("data") not in (None, {}):
+                        result, status, error = None, "failed", "exploration/status commands take no arguments"
+                    elif ability == "get_robot_status":
                         try:
                             result = node.status(args.robot_id)
                             status, error = "complete", None
                         except Exception as exc:
                             result, status, error = None, "failed", type(exc).__name__
+                    elif ability in node.exploration_services:
+                        try:
+                            result = await call_exploration_service(node, ability)
+                            status = "complete" if result["success"] else "failed"
+                            error = None if result["success"] else result["message"]
+                        except Exception as exc:
+                            result, status, error = None, "failed", type(exc).__name__
+                    else:
+                        result, status, error = None, "failed", "Unsupported ROS bridge command"
                     await ws.send(json.dumps({
                         "type": "event", "event": "COMMAND_RESULT", "timestamp": utc_now(),
                         "data": {
