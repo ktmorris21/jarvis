@@ -198,3 +198,99 @@ inflation, or obstacle detection merely to force a route through.
 The next increment enables bounded supervised goal execution and
 cancellation, after hard-stop safety is validated. Voice/Agent SDK
 exposure comes later; neither is part of this increment.
+
+
+## Frontier exploration sprint — Milestone 2B: supervised autonomous driving
+
+**Disabled by default.** Nothing begins driving on a clean reboot or Nav2
+restart. Milestone 2A frontier/route preview remains available while idle.
+
+Only the three requested safeguards are included:
+
+1. Explicit ROS Trigger services to start, stop, and check status:
+   `/jarvis/exploration/start`, `/jarvis/exploration/stop`,
+   `/jarvis/exploration/status`.
+   Stop requests Nav2 goal cancellation and motor **disarm** through the
+   existing `/jarvis_drive/set_armed` SetBool service. If the disarm
+   service is unavailable, use the physical motor cutoff.
+2. On Nav2 goal success, return to frontier selection when new map data
+   arrives. On failure, blacklist staging points within 0.40 m of the
+   failed point for the session, and select another. Three consecutive
+   navigation goal failures stop the session. A successful goal resets
+   the consecutive-failure count. With no remaining eligible/reachable
+   frontiers, exploration stops.
+3. Stop/cancel/disarm when both required live LiDAR inputs aren't fresh
+   (each scan must be within 2 seconds), the `map -> base_link` transform
+   is older than 1 second, or map messages go more than 20 seconds without
+   an update. The local detector checks health every 0.25 seconds.
+   The last condition detects loss of map publication, not whether
+   SLAM is accurately localized.
+
+**Not included**: exploration duration cap, independent collision monitor,
+rear collision recovery, automatic map saving, automatic motor arming,
+Agent SDK tool/voice command, and a separate safety supervisor.
+The existing drive watchdog remains active. Path planning and Nav2's
+controller use both upper and lower LiDAR costmap observations.
+
+### Deploy under the existing Nav2 service
+
+```bash
+cd ~/jarvis
+git pull --ff-only
+python3 -m py_compile ops/nav2/frontier_detector.py
+sudo systemctl restart jarvis-nav2.service
+```
+
+**Do not arm or start until** the controller, planner, and BT navigator
+are all `active [3]` and both costmaps have updated. We previously saw
+lifecycle initialization occasionally fail on ordinary service restart.
+Use RViz to verify the preview route and clear the test area.
+
+### Run supervised exploration (one terminal, no new daemon)
+
+Arm the motors **separately** using your existing confirmed offline
+voice command or existing SetBool service. The exploration controller
+intentionally does not arm them:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 service call /jarvis_drive/set_armed std_srvs/srv/SetBool "{data: true}"
+ros2 service call /jarvis/exploration/start std_srvs/srv/Trigger "{}"
+```
+
+The explorer immediately begins choosing and executing frontier goals.
+Monitor the robot in person. It can continue indefinitely until frontiers
+are exhausted, a health/failure condition stops it, or you stop it.
+
+To stop from the same terminal (or another available shell):
+
+```bash
+ros2 service call /jarvis/exploration/stop std_srvs/srv/Trigger "{}"
+```
+
+To read progress:
+
+```bash
+ros2 service call /jarvis/exploration/status std_srvs/srv/Trigger "{}"
+```
+
+If any software cancellation fails, use the existing physical motor
+power cutoff. A service call response confirms the request was received,
+**not** that Nav2 has already acknowledged cancellation and the motors
+have physically stopped. Voice control through the Agent SDK is a future
+increment; no new model-facing movement tool is exposed yet.
+
+### Observability
+
+The existing RViz selection and selected-path topics are unchanged.
+Status reports `mode`, `goals_completed`, `consecutive_failures`,
+and the most recent reason. Live logs are in the same systemd unit:
+
+```bash
+journalctl -u jarvis-nav2.service -n 80 --no-pager | grep -Ei 'exploration|frontier|goal|error'
+```
+
+This code has been committed but has not been hardware-tested by the
+assistant; first run should be short, supervised, and in a clear area.
