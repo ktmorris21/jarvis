@@ -12,6 +12,7 @@ import wave
 from pathlib import Path
 
 from local_commands import PROMPTS
+from boot_notice import BOOT_GREETING
 
 DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "cache" / "local_voice"
 DEFAULT_VOICE = "/home/shadowfax/jarvis/voices/en_GB-alan-medium.onnx"
@@ -19,6 +20,7 @@ DEFAULT_PIPER = "/home/shadowfax/jarvis/.venv-voice/bin/piper"
 
 # Only these fixed phrases are cached. Unrecognized/dynamic text uses Piper.
 LOCAL_REPLIES = frozenset({
+    BOOT_GREETING,
     *(pair[0] for pair in PROMPTS.values()),
     "Motors armed.",
     "Motors disarmed.",
