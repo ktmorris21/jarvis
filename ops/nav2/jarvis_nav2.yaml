@@ -44,7 +44,7 @@ controller_server:
       use_regulated_linear_velocity_scaling: false
       use_cost_regulated_linear_velocity_scaling: false
       use_rotate_to_heading: false
-      allow_reversing: false
+      allow_reversing: true
       max_robot_pose_search_dist: 2.0
 
 planner_server:
@@ -57,7 +57,8 @@ planner_server:
       tolerance: 0.20
       downsample_costmap: false
       allow_unknown: false
-      motion_model_for_search: "DUBIN"
+      motion_model_for_search: "REEDS_SHEPP"
+      reverse_penalty: 2.0
       angle_quantization_bins: 64
       minimum_turning_radius: 0.20
       max_planning_time: 3.0
