@@ -7,6 +7,7 @@ No separate velocity smoother or collision monitor process yet.
 from pathlib import Path
 
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 
 HERE = Path(__file__).resolve().parent
@@ -17,6 +18,12 @@ NODES = ("controller_server", "planner_server", "bt_navigator")
 
 def generate_launch_description():
     nodes = [
+        # Read-only frontier visualization; no motor commands or Nav2 goals.
+        # Launch alongside Nav2 under the same systemd service.
+        ExecuteProcess(
+            cmd=["/usr/bin/python3", "-u", str(HERE / "frontier_detector.py")],
+            output="screen",
+        ),
         Node(
             package="nav2_controller",
             executable="controller_server",
