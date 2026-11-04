@@ -173,6 +173,30 @@ async def call_exploration_service(node, ability, timeout=5.0):
     return {"success": bool(result.success), "message": result.message}
 
 
+def parse_exploration_status(reply):
+    """Convert the local Trigger response into structured snapshot data."""
+    if not reply.get("success"):
+        return {"available": False, "reason": reply.get("message", "Unavailable")}
+    message = reply.get("message", "")
+    fields = {}
+    for part in message.split(", ", 3):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            fields[key] = value
+    if fields.get("mode") not in {"idle", "exploring"}:
+        return {"available": False, "reason": "Malformed exploration status"}
+    try:
+        return {
+            "available": True,
+            "mode": fields["mode"],
+            "goals_completed": int(fields["goals_completed"]),
+            "consecutive_failures": int(fields["consecutive_failures"]),
+            "reason": fields["reason"],
+        }
+    except (KeyError, ValueError):
+        return {"available": False, "reason": "Incomplete exploration status"}
+
+
 def ros_spin(node, stop):
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -209,6 +233,17 @@ async def bridge_loop(args, node):
                     elif ability == "get_robot_status":
                         try:
                             result = node.status(args.robot_id)
+                            # Enrich the existing per-turn context with live
+                            # exploration state, without another LLM tool call.
+                            # A missing/busy exploration service must NOT
+                            # make the robot health snapshot unavailable.
+                            try:
+                                exploration = await call_exploration_service(
+                                    node, "exploration_status", timeout=0.7)
+                                result["exploration"] = parse_exploration_status(exploration)
+                            except Exception as exc:
+                                result["exploration"] = {
+                                    "available": False, "reason": type(exc).__name__}
                             status, error = "complete", None
                         except Exception as exc:
                             result, status, error = None, "failed", type(exc).__name__
