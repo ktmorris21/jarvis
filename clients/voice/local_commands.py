@@ -115,7 +115,12 @@ class LocalCommands:
     def available(self):
         return self._recognizer_model is not None
 
-    def transcribe(self, wav, grammar=None):
+    def transcribe(self, wav, grammar=LOCAL_GRAMMAR):
+        """Use the narrow safety-command grammar by default.
+
+        Passing None explicitly selects unrestricted recognition, exclusively
+        for the conversational sign-off fallback.
+        """
         from vosk import KaldiRecognizer
         with wave.open(BytesIO(wav), "rb") as wf:
             if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
