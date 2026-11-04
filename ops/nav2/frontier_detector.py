@@ -220,6 +220,7 @@ class FrontierDetector(Node):
             if generation != self._generation or self._mode != "exploring":
                 if handle.accepted:
                     handle.cancel_goal_async()
+                self._navigation_handle = None
                 return
             if not handle.accepted:
                 self.goal_failed("Nav2 rejected navigation goal", position)
@@ -227,6 +228,7 @@ class FrontierDetector(Node):
             handle.get_result_async().add_done_callback(
                 lambda f: self.on_navigation_result(f, generation, position))
         except Exception as exc:
+            self._navigation_handle = None
             self.goal_failed(f"Nav2 goal acceptance error: {type(exc).__name__}", position)
 
     def on_navigation_result(self, future, generation, position):
@@ -443,6 +445,8 @@ class FrontierDetector(Node):
         # Empty frontiers invalidate any previously rendered selection.
         self.clear_selection(message.header.frame_id or "map")
         if not clusters:
+            if self._mode == "exploring":
+                self.halt_exploration("No unexplored frontier clusters remain")
             return
         frame = message.header.frame_id or "map"
         robot = self.robot_pose(frame)
