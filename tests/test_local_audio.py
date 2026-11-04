@@ -7,13 +7,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "clients" / "voice"
 
 from local_audio import LOCAL_REPLIES, cache_file, valid_wav
 from local_commands import PROMPTS
+from boot_notice import BOOT_GREETING
 
 
 def test_prompts_and_outcomes_all_have_cache_entries():
     for prompt, _ in PROMPTS.values():
         assert prompt in LOCAL_REPLIES
         assert cache_file(prompt) is not None
-    for reply in ("Motors armed.", "Motors disarmed.", "Powering down Jarvis."):
+    for reply in ("Motors armed.", "Motors disarmed.", "Powering down Jarvis.", BOOT_GREETING):
         assert cache_file(reply) is not None
 
 
