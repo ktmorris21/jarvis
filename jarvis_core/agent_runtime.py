@@ -29,6 +29,9 @@ AGENT_TOOL_NAMES = frozenset({
     "set_audio_level",
     "set_lidar_service",
     "reboot_pi",
+    "explore",
+    "stop_exploring",
+    "exploration_status",
 })
 
 
@@ -120,6 +123,37 @@ async def pi_control_data(ability: str, data: dict) -> dict:
         if event.get("status") != "complete" or not isinstance(event.get("result"), dict):
             return {"available": False, "reason": event.get("error") or "Pi operation failed"}
         return {"available": True, **event["result"]}
+    finally:
+        _pending_status.pop(command.command_id, None)
+
+
+async def exploration_command_data(ability: str) -> dict:
+    """Send a bounded start/stop/status request to the Pi's existing ROS bridge.
+
+    The ROS service returns immediately; the long-running exploration loop is
+    owned by ROS, not by a Core tool call or an LLM inference.
+    """
+    from .executive import send_command
+    from .models import Command
+
+    command = Command(target="picar-ros", ability=ability)
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    _pending_status[command.command_id] = future
+    try:
+        sent, route = await send_command(command)
+        if not sent:
+            return {"available": False, "success": False, "reason": route}
+        try:
+            event = await asyncio.wait_for(future, timeout=9.0)
+        except asyncio.TimeoutError:
+            return {"available": False, "success": False, "reason": "ROS exploration command timed out"}
+        result = event.get("result")
+        if event.get("status") != "complete" or not isinstance(result, dict):
+            return {"available": True, "success": False,
+                    "reason": event.get("error") or "Exploration command failed"}
+        return {"available": True, "success": bool(result.get("success")),
+                "message": str(result.get("message", ""))}
     finally:
         _pending_status.pop(command.command_id, None)
 
