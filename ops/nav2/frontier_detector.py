@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Read-only frontier discovery for Jarvis's live slam_toolbox occupancy map.
+"""Read-only frontier detection and Nav2 path verification.
 
-No Nav2 actions, velocity commands, or motor connections. Candidate markers
-are *observations*, not validated or reachable navigation destinations.
+ComputePathToPose only: never call NavigateToPose, publish cmd_vel, or arm motors.
 """
 from collections import deque
 import math
 
 import rclpy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
+from nav_msgs.msg import Path
+from nav2_msgs.action import ComputePathToPose
+from rclpy.action import ActionClient
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformListener
+import time
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -24,13 +29,30 @@ class FrontierDetector(Node):
         self.declare_parameter("free_threshold", 20)
         self._latest_map = None
         self._latest_stamp = None
+        self._planning = False
+        self._candidates = []
+        self._candidate_index = 0
+        self._evaluated = []
+        self._best = None
+        self._batch_started = 0.0
+        self._next_batch = 0.0
+        self._active_goal = None
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._plan_client = ActionClient(self, ComputePathToPose, "/compute_path_to_pose")
+        self.declare_parameter("planning_interval_seconds", 20.0)
+        self.declare_parameter("staging_distance_m", 0.35)
+        self.declare_parameter("maximum_candidates_to_plan", 5)
+        self.declare_parameter("minimum_goal_distance_m", 0.30)
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                          durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(OccupancyGrid, "/map", self.on_map, qos)
         self._markers = self.create_publisher(MarkerArray, "/jarvis/exploration/frontiers", qos)
+        self._selection = self.create_publisher(MarkerArray, "/jarvis/exploration/selection", qos)
+        self._selected_path = self.create_publisher(Path, "/jarvis/exploration/selected_path", qos)
         self.create_timer(float(self.get_parameter("update_period_seconds").value),
                           self.publish_frontiers)
-        self.get_logger().info("Frontier detection active (READ ONLY): /map -> /jarvis/exploration/frontiers")
+        self.get_logger().info("Frontier planning preview enabled (READ ONLY): /map + ComputePathToPose")
 
     def on_map(self, message):
         self._latest_map = message
@@ -145,9 +167,227 @@ class FrontierDetector(Node):
             target.color.r, target.color.g, target.color.b, target.color.a = (1.0, 0.65, 0.05, 1.0)
             markers.markers.append(target)
         self._markers.publish(markers)
+        self.start_planning_preview(message, clusters)
         self.get_logger().info(
             f"Frontier clusters={len(clusters)} "
             f"(largest cells={len(clusters[0]) if clusters else 0}); visualization only")
+
+
+    @staticmethod
+    def point_is_clear(message, x, y, radius):
+        """Require a known-free circular neighborhood, not just one free cell."""
+        info = message.info
+        radius_cells = int(math.ceil(radius / info.resolution))
+        for dy in range(-radius_cells, radius_cells + 1):
+            for dx in range(-radius_cells, radius_cells + 1):
+                if dx * dx + dy * dy > (radius / info.resolution) ** 2:
+                    continue
+                xx, yy = x + dx, y + dy
+                if xx < 0 or xx >= info.width or yy < 0 or yy >= info.height:
+                    return False
+                if message.data[yy * info.width + xx] < 0 or message.data[yy * info.width + xx] > 20:
+                    return False
+        return True
+
+    @classmethod
+    def staging_point(cls, message, cluster, distance):
+        """Pick a known-free interior cell with footprint room behind a frontier."""
+        info = message.info
+        width, height = info.width, info.height
+        frontier_center_x = sum(i % width for i in cluster) / len(cluster)
+        frontier_center_y = sum(i // width for i in cluster) / len(cluster)
+        radius = max(1, int(math.ceil((distance + 0.2) / info.resolution)))
+        options = []
+        for index in sorted(cluster, key=lambda i:
+                            (i % width - frontier_center_x)**2 +
+                            (i // width - frontier_center_y)**2)[:min(8, len(cluster))]:
+            fx, fy = index % width, index // width
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    distance_m = math.hypot(dx, dy) * info.resolution
+                    if distance_m < distance * 0.8 or distance_m > distance + 0.15:
+                        continue
+                    xx, yy = fx + dx, fy + dy
+                    if not (0 <= xx < width and 0 <= yy < height):
+                        continue
+                    if cls.point_is_clear(message, xx, yy, 0.23):
+                        options.append((abs(distance_m - distance)
+                                        + 0.01 * math.hypot(xx-frontier_center_x, yy-frontier_center_y),
+                                        yy * width + xx, index))
+            if options:
+                break
+        if not options:
+            return None
+        _, staging_index, frontier_index = min(options)
+        return cls.world_point(message, staging_index), cls.world_point(message, frontier_index)
+
+    def robot_pose(self, frame):
+        try:
+            tf = self._tf_buffer.lookup_transform(frame, "base_link", Time())
+            stamp = tf.header.stamp
+            if stamp.sec == 0 and stamp.nanosec == 0:
+                return None
+            stamp_seconds = stamp.sec + stamp.nanosec * 1e-9
+            if abs(self.get_clock().now().nanoseconds * 1e-9 - stamp_seconds) > 1.0:
+                return None
+            return tf.transform.translation, tf.transform.rotation
+        except Exception:
+            return None
+
+    @staticmethod
+    def make_pose(frame, position, quaternion, clock):
+        pose = PoseStamped()
+        pose.header.frame_id = frame
+        pose.header.stamp = clock.now().to_msg()
+        pose.pose.position.x = position.x
+        pose.pose.position.y = position.y
+        pose.pose.orientation = quaternion
+        return pose
+
+    def start_planning_preview(self, message, clusters):
+        now = time.monotonic()
+        if self._planning or now < self._next_batch:
+            return
+        self._next_batch = now + float(self.get_parameter("planning_interval_seconds").value)
+        # Empty frontiers invalidate any previously rendered selection.
+        self.clear_selection(message.header.frame_id or "map")
+        if not clusters:
+            return
+        frame = message.header.frame_id or "map"
+        robot = self.robot_pose(frame)
+        if robot is None or not self._plan_client.server_is_ready():
+            self.get_logger().info("Preview waiting for fresh robot TF and ACTIVE Nav2 planner")
+            return
+        position, orientation = robot
+        candidates = []
+        for cluster in clusters[:20]:
+            stage = self.staging_point(
+                message, cluster, float(self.get_parameter("staging_distance_m").value))
+            if stage is None:
+                continue
+            goal_pos, frontier_pos = stage
+            direct = math.hypot(goal_pos.x - position.x, goal_pos.y - position.y)
+            if direct < float(self.get_parameter("minimum_goal_distance_m").value):
+                continue
+            # Prefer large frontiers while keeping travel reasonable; the
+            # actual ranking only uses successfully computed Nav2 path lengths.
+            priority = direct - 0.012 * min(len(cluster), 100)
+            candidates.append((priority, len(cluster), goal_pos, frontier_pos))
+        candidates.sort(key=lambda item: item[0])
+        limit = int(self.get_parameter("maximum_candidates_to_plan").value)
+        self._candidates = candidates[:max(0, limit)]
+        if not self._candidates:
+            self.get_logger().info("No frontier staging cells with clear known-free footprint")
+            return
+        self._start_pose = self.make_pose(frame, position, orientation, self.get_clock())
+        self._frame = frame
+        self._candidate_index = 0
+        self._best = None
+        self._evaluated = []
+        self._planning = True
+        self._batch_started = now
+        self.get_logger().info(f"Checking {len(self._candidates)} frontier paths with Nav2 (no driving)")
+        self.plan_next()
+
+    def plan_next(self):
+        if not self._planning:
+            return
+        if self._candidate_index >= len(self._candidates):
+            self.finish_batch()
+            return
+        # Never let an unresponsive action leave a permanent pending preview.
+        if time.monotonic() - self._batch_started > 25.0:
+            self.get_logger().warning("Frontier preview batch timed out; will retry later")
+            self.finish_batch()
+            return
+        _, count, position, frontier = self._candidates[self._candidate_index]
+        angle = math.atan2(frontier.y - position.y, frontier.x - position.x)
+        from geometry_msgs.msg import Quaternion
+        heading = Quaternion(z=math.sin(angle / 2), w=math.cos(angle / 2))
+        goal = ComputePathToPose.Goal()
+        goal.start = self._start_pose
+        goal.goal = self.make_pose(self._frame, position, heading, self.get_clock())
+        goal.planner_id = "GridBased"
+        goal.use_start = True
+        try:
+            future = self._plan_client.send_goal_async(goal)
+            future.add_done_callback(self.on_plan_accepted)
+        except Exception as exc:
+            self.get_logger().warning(f"Planner request failed: {type(exc).__name__}")
+            self._candidate_index += 1
+            self.plan_next()
+
+    def on_plan_accepted(self, future):
+        try:
+            handle = future.result()
+            if not handle.accepted:
+                self._candidate_index += 1
+                self.plan_next()
+                return
+            self._active_goal = handle
+            handle.get_result_async().add_done_callback(self.on_plan_result)
+        except Exception as exc:
+            self.get_logger().warning(f"Planner goal acceptance failed: {type(exc).__name__}")
+            self._candidate_index += 1
+            self.plan_next()
+
+    def on_plan_result(self, future):
+        try:
+            response = future.result()
+            result = response.result
+            path = result.path
+            if response.status == 4 and result.error_code == 0 and len(path.poses) >= 2:
+                length = sum(math.hypot(
+                    b.pose.position.x - a.pose.position.x,
+                    b.pose.position.y - a.pose.position.y)
+                    for a, b in zip(path.poses, path.poses[1:]))
+                _, cluster_size, stage, frontier = self._candidates[self._candidate_index]
+                # Small information-gain bonus, but path length remains dominant.
+                score = length - 0.012 * min(cluster_size, 100)
+                self._evaluated.append((score, length))
+                if self._best is None or score < self._best[0]:
+                    self._best = (score, length, path, stage, frontier, cluster_size)
+        except Exception as exc:
+            self.get_logger().warning(f"Planner result unavailable: {type(exc).__name__}")
+        finally:
+            self._active_goal = None
+            self._candidate_index += 1
+            self.plan_next()
+
+    def clear_selection(self, frame):
+        clear = Marker()
+        clear.header.frame_id = frame
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.action = Marker.DELETEALL
+        self._selection.publish(MarkerArray(markers=[clear]))
+        blank = Path()
+        blank.header.frame_id = frame
+        blank.header.stamp = clear.header.stamp
+        self._selected_path.publish(blank)
+
+    def finish_batch(self):
+        self._planning = False
+        if self._best is None:
+            self.get_logger().info("Preview: no valid Nav2 path among tested frontiers")
+            return
+        _, length, path, stage, frontier, count = self._best
+        marker = Marker()
+        marker.header.frame_id = self._frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "selected_staging_point"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position = stage
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.16
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.15, 0.35, 1.0, 1.0
+        self._selection.publish(MarkerArray(markers=[marker]))
+        path.header.frame_id = self._frame
+        self._selected_path.publish(path)
+        self.get_logger().info(
+            f"Preview best frontier: cluster={count} cells, path={length:.2f}m, "
+            f"goal=({stage.x:.2f},{stage.y:.2f}); NO NAVIGATION COMMAND SENT")
 
 
 def main():
