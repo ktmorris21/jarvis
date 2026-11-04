@@ -96,23 +96,34 @@ local_costmap:
       transform_tolerance: 0.25
       footprint: "[[0.2032, 0.073025], [0.2032, -0.073025], [-0.09525, -0.073025], [-0.09525, 0.073025]]"
       footprint_padding: 0.01
-      plugins: ["obstacle_layer", "inflation_layer"]
-      obstacle_layer:
+      plugins: ["upper_obstacles", "lower_obstacles", "inflation_layer"]
+      # Maintain independent occupancy so one scanner cannot clear the other's detections.
+      upper_obstacles:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: upper lower
+        combination_method: 1
+        observation_sources: upper
         upper:
           topic: /scan
           data_type: "LaserScan"
           marking: true
           clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 2.0
           obstacle_max_range: 2.5
           raytrace_max_range: 3.0
+      lower_obstacles:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        combination_method: 1
+        observation_sources: lower
         lower:
           topic: /scan_lower
           data_type: "LaserScan"
           marking: true
           clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 2.0
           obstacle_max_range: 2.5
           raytrace_max_range: 3.0
       inflation_layer:
@@ -134,27 +145,38 @@ global_costmap:
       track_unknown_space: true
       footprint: "[[0.2032, 0.073025], [0.2032, -0.073025], [-0.09525, -0.073025], [-0.09525, 0.073025]]"
       footprint_padding: 0.01
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "upper_obstacles", "lower_obstacles", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
         subscribe_to_updates: true
-      obstacle_layer:
+      # Maintain independent occupancy so one scanner cannot clear the other's detections.
+      upper_obstacles:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: upper lower
+        combination_method: 1
+        observation_sources: upper
         upper:
           topic: /scan
           data_type: "LaserScan"
           marking: true
           clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 2.0
           obstacle_max_range: 2.5
           raytrace_max_range: 3.0
+      lower_obstacles:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        combination_method: 1
+        observation_sources: lower
         lower:
           topic: /scan_lower
           data_type: "LaserScan"
           marking: true
           clearing: true
+          min_obstacle_height: -0.10
+          max_obstacle_height: 2.0
           obstacle_max_range: 2.5
           raytrace_max_range: 3.0
       inflation_layer:
