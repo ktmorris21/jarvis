@@ -150,3 +150,51 @@ Next increment: plan-checked candidate staging points, a bounded
 NavigateToPose exploration loop, explicit stop/cancel and safety gating,
 then asynchronous Agent SDK tools. The actual frontier detector in this
 milestone does not command Jarvis to drive.
+
+
+## Frontier exploration sprint — milestone 2A: plan preview (motors DISARMED)
+
+The existing frontier detector now evaluates staging points `~0.35m` back
+from frontier boundaries, requiring a `0.23m` known-free disk around each
+candidate. Every `20s` at most, it checks up to five candidates via
+Nav2's `/compute_path_to_pose` action using the existing Smac Hybrid
+Reeds-Shepp `GridBased` planner. Candidates are rejected if they do not
+yield a successful nonempty path. A short path is preferred, with a
+modest bonus for larger frontier clusters.
+
+**This is still strictly planning only.** The detector never invokes
+NavigateToPose, publishes velocity, or arms the robot. Planner success
+means Nav2 found a path under its current modeled constraints, **not**
+proof of safe real-world traversal.
+
+### One-service deployment
+
+```bash
+cd ~/jarvis
+git pull --ff-only
+python3 -m py_compile ops/nav2/frontier_detector.py
+sudo systemctl restart jarvis-nav2.service
+```
+
+After restart confirm the previously problematic Nav2 lifecycle nodes
+are all `active [3]`. If not, inspect `journalctl -u jarvis-nav2.service`
+before trusting the route preview.
+
+In RViz with Fixed Frame `map`, retain milestone 1 frontiers and add:
+
+- **MarkerArray** topic `/jarvis/exploration/selection`:
+  a **blue sphere** at the currently preferred known-free staging point.
+- **Path** topic `/jarvis/exploration/selected_path`:
+  Nav2's returned route to that point.
+
+The detector logs `Preview best frontier...` or `Preview: no valid
+Nav2 path...`. Candidates are reevaluated periodically as the live map
+changes. Selection visualization may briefly clear while recomputing.
+
+A missing blue marker can be legitimate if no candidate passes the
+known-free staging or Nav2 path checks. Do not reduce footprint,
+inflation, or obstacle detection merely to force a route through.
+
+The next increment enables bounded supervised goal execution and
+cancellation, after hard-stop safety is validated. Voice/Agent SDK
+exposure comes later; neither is part of this increment.
