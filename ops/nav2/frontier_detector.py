@@ -90,8 +90,9 @@ class FrontierDetector(Node):
         for name, seen in self._scan_received_at.items():
             if seen is None or now - seen > 2.0:
                 return False, f"{name} LiDAR scan older than 2 seconds"
-        if self.robot_pose("map") is None:
-            return False, "Localization transform missing or older than 1 second"
+        pose, pose_reason = self.robot_pose("map", diagnostic=True)
+        if pose is None:
+            return False, pose_reason
         return True, "OK"
 
     def start_exploration(self, request, response):
@@ -415,18 +416,29 @@ class FrontierDetector(Node):
         _, staging_index, frontier_index = min(options)
         return cls.world_point(message, staging_index), cls.world_point(message, frontier_index)
 
-    def robot_pose(self, frame):
+    def robot_pose(self, frame, diagnostic=False):
+        """Read the latest map-frame pose and explain timing failures.
+
+        TF can lag during idle SLAM updates. Allow up to 3 seconds but never
+        accept an arbitrarily old pose or hide a missing transform.
+        """
+        reason = "Localization transform unavailable"
         try:
             tf = self._tf_buffer.lookup_transform(frame, "base_link", Time())
             stamp = tf.header.stamp
             if stamp.sec == 0 and stamp.nanosec == 0:
-                return None
-            stamp_seconds = stamp.sec + stamp.nanosec * 1e-9
-            if abs(self.get_clock().now().nanoseconds * 1e-9 - stamp_seconds) > 1.0:
-                return None
-            return tf.transform.translation, tf.transform.rotation
-        except Exception:
-            return None
+                reason = "Localization transform has zero timestamp"
+            else:
+                stamp_seconds = stamp.sec + stamp.nanosec * 1e-9
+                age = self.get_clock().now().nanoseconds * 1e-9 - stamp_seconds
+                if not -0.5 <= age <= 3.0:
+                    reason = f"Localization transform age {age:.2f}s (allowed -0.5 to 3.0s)"
+                else:
+                    result = (tf.transform.translation, tf.transform.rotation)
+                    return (result, "OK") if diagnostic else result
+        except Exception as exc:
+            reason = f"Localization lookup failed: {type(exc).__name__}"
+        return (None, reason) if diagnostic else None
 
     @staticmethod
     def make_pose(frame, position, quaternion, clock):
