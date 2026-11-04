@@ -46,6 +46,18 @@ PROMPTS = {
 }
 # Disarm is intentionally a single utterance for rapid operator control.
 
+# Vosk's unrestricted recognizer has misheard 'Hey Jarvis, arm motors'
+# as 'he drove his arm motors'. Its small language model performs much better
+# with a narrow task grammar. [unk] permits unrelated speech to be rejected
+# rather than forced into a command phrase.
+LOCAL_PHRASES = tuple(COMMANDS) + tuple(prompt[1] for prompt in PROMPTS.values())
+LOCAL_GRAMMAR = sorted(set(
+    variant
+    for phrase in LOCAL_PHRASES
+    for variant in (phrase, "jarvis " + phrase, "hey jarvis " + phrase)
+)) + ["[unk]"]
+
+
 
 class LocalCommands:
     def __init__(self, model_path=None):
@@ -73,13 +85,14 @@ class LocalCommands:
         with wave.open(BytesIO(wav), "rb") as wf:
             if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
                 raise ValueError("Expected 16 kHz mono 16-bit PCM")
-            rec = KaldiRecognizer(self._recognizer_model, 16000)
+            rec = KaldiRecognizer(self._recognizer_model, 16000, json.dumps(LOCAL_GRAMMAR))
             while True:
                 block = wf.readframes(4000)
                 if not block:
                     break
                 rec.AcceptWaveform(block)
-        return json.loads(rec.FinalResult()).get("text", "")
+        result = json.loads(rec.FinalResult())
+        return result.get("text", "")
 
     async def _ros_armed(self, armed):
         # Restrict to fixed trusted service and fixed boolean request.
@@ -126,7 +139,7 @@ class LocalCommands:
             return False, None, None
         transcript = await asyncio.to_thread(self.transcribe, audio)
         normalized = normalize(transcript)
-        print(f"[LOCAL] Offline transcript={normalized!r}", flush=True)
+        print(f"[LOCAL] Grammar transcript={normalized!r} (raw={transcript!r})", flush=True)
 
         if self.pending and time.monotonic() > self.pending_until:
             self.pending = None
