@@ -61,3 +61,44 @@ def test_memory_tool_limits_results(monkeypatch):
 
     monkeypatch.setattr(memory, "retrieve", fake_retrieve)
     assert search_memory_data("LiDAR")[0]["content"] == "A fact"
+
+
+def test_exploration_command_reaches_ros_bridge(monkeypatch):
+    from jarvis_core import executive
+    from jarvis_core.agent_runtime import exploration_command_data, _pending_status
+
+    async def fake_send(command):
+        assert command.target == "picar-ros"
+        assert command.ability == "explore"
+        assert command.data == {}
+        asyncio.get_running_loop().call_soon(
+            deliver_status_result,
+            {"command_id": command.command_id, "status": "complete",
+             "result": {"success": True, "message": "Exploration enabled"}})
+        return True, "picar-ros"
+
+    monkeypatch.setattr(executive, "send_command", fake_send)
+    result = asyncio.run(exploration_command_data("explore"))
+    assert result["available"] is True
+    assert result["success"] is True
+    assert not _pending_status
+
+
+def test_exploration_tool_fails_closed_when_ros_unavailable(monkeypatch):
+    from jarvis_core import executive
+    from jarvis_core.agent_runtime import exploration_command_data
+    from jarvis_core.abilities import CORE_TOOLS, execute_tool
+    from fastapi import HTTPException
+    import pytest
+
+    async def fake_send(command):
+        return False, "Robot disconnected"
+
+    monkeypatch.setattr(executive, "send_command", fake_send)
+    for name in ("explore", "stop_exploring", "exploration_status"):
+        assert name in CORE_TOOLS
+        assert asyncio.run(execute_tool(name, {})) == {
+            "available": False, "success": False, "reason": "Robot disconnected"
+        }
+        with pytest.raises(HTTPException):
+            asyncio.run(execute_tool(name, {"unexpected": True}))
