@@ -19,6 +19,7 @@ import httpx
 import numpy as np
 import websockets
 from openwakeword.model import Model
+from local_commands import LocalCommands
 
 
 DEVICE = "plughw:CARD=J710,DEV=0"
@@ -380,31 +381,87 @@ async def send_utterance(url, token, wav):
         return result
 
 
-async def conversation_loop(model, head, args, response_finished):
-    """Handle wake-word turns until interrupted or the Core socket disconnects."""
+async def core_socket_worker(args, head, response_finished, connection_state):
+    """Keep Core connectivity independent of the local wake-word loop."""
+    from urllib.parse import quote
+    ws_url = (args.url.rstrip("/").replace("https://", "wss://")
+              .replace("http://", "ws://") + "/ws?token="
+              + quote(args.token, safe=""))
+    while True:
+        try:
+            async with websockets.connect(
+                ws_url, max_size=16 * 1024 * 1024,
+                ping_interval=20, ping_timeout=20, open_timeout=15
+            ) as ws:
+                await ws.send(json.dumps({
+                    "type": "hello", "interface_id": INTERFACE_ID,
+                    "interface_type": "mobile_body",
+                    "capabilities": ["speaker", "audio_input", "audio_output"],
+                }))
+                hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+                if hello.get("type") != "hello_ack":
+                    raise RuntimeError(f"Unexpected Core hello: {hello!r}")
+                connection_state["ready"] = True
+                print("[VOICE] Core connected", flush=True)
+                await receive_commands(ws, response_finished, head)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[VOICE] Core unavailable: {exc!r}", flush=True)
+        finally:
+            connection_state["ready"] = False
+            response_finished.set()
+        await asyncio.sleep(3)
+
+
+async def conversation_loop(model, head, args, response_finished, connection_state, local):
+    """Listen continuously; intercept known commands before Core upload."""
     while True:
         wav = await listen_for_command(model, head)
+        try:
+            handled, reply, power_action = await local.act(wav)
+            if handled:
+                print("[LOCAL]", reply, flush=True)
+                await head.set("speaking")
+                try:
+                    await play_piper(reply)
+                except Exception as exc:
+                    print("[LOCAL] Audio playback failed:", repr(exc), flush=True)
+                    power_action = None
+                finally:
+                    await head.set("idle")
+                if power_action:
+                    try:
+                        await local.system_action(power_action)
+                    except Exception as exc:
+                        print("[LOCAL] System action failed:", repr(exc), flush=True)
+                        try:
+                            await play_piper("Power command failed.")
+                        except Exception:
+                            pass
+                continue
+        except Exception as exc:
+            print("[LOCAL] Recognition failed:", repr(exc), flush=True)
+
+        if not connection_state["ready"]:
+            print("[VOICE] Core offline; ordinary conversation unavailable", flush=True)
+            await head.set("idle")
+            continue
+
         await head.set("thinking")
         response_finished.clear()
         response_finished.sent_at = time.monotonic()
-
         try:
             result = await send_utterance(args.url, args.token, wav)
-            print(
-                f"[TIMING] HTTP acknowledgment: "
-                f"{time.monotonic() - response_finished.sent_at:.2f}s",
-                flush=True,
-            )
+            print(f"[TIMING] HTTP acknowledgment: "
+                  f"{time.monotonic()-response_finished.sent_at:.2f}s", flush=True)
             if result.get("status") == "no_speech":
                 print("No speech recognized.")
                 continue
-
-            print("Waiting for Jarvis's response...", flush=True)
             try:
                 await asyncio.wait_for(response_finished.wait(), timeout=45)
             except asyncio.TimeoutError:
                 print("No speaker response received within 45 seconds.", flush=True)
-
         except Exception as exc:
             print("Core request failed:", repr(exc), flush=True)
         finally:
@@ -412,86 +469,23 @@ async def conversation_loop(model, head, args, response_finished):
 
 
 async def main(args):
-    model = Model(
-        wakeword_models=["hey jarvis"],
-        inference_framework="onnx",
-    )
-    ws_url = (
-        args.url.rstrip("/")
-        .replace("https://", "wss://")
-        .replace("http://", "ws://")
-        + "/ws"
-    )
-    from urllib.parse import quote
-    ws_url += "?token=" + quote(args.token, safe="")
-
+    model = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
+    local = LocalCommands()
     head = HeadExpressions()
     await head.start()
+    response_finished = asyncio.Event()
+    response_finished.sent_at = time.monotonic()
+    connection_state = {"ready": False}
+    socket_task = asyncio.create_task(
+        core_socket_worker(args, head, response_finished, connection_state)
+    )
     try:
-        # Reconnect without restarting the Pi or reloading the wake-word model.
-        while True:
-            await head.set("idle")
-            try:
-                async with websockets.connect(
-                    ws_url,
-                    max_size=16 * 1024 * 1024,
-                    ping_interval=20,
-                    ping_timeout=20,
-                    open_timeout=15,
-                ) as ws:
-                    await ws.send(json.dumps({
-                        "type": "hello",
-                        "interface_id": INTERFACE_ID,
-                        "interface_type": "mobile_body",
-                        "capabilities": [
-                            "speaker", "audio_input", "audio_output"
-                        ],
-                    }))
-                    hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
-                    if hello.get("type") != "hello_ack":
-                        raise RuntimeError(f"Unexpected Core hello: {hello!r}")
-                    print("Connected:", hello, flush=True)
-
-                    response_finished = asyncio.Event()
-                    response_finished.sent_at = time.monotonic()
-                    receiver = asyncio.create_task(
-                        receive_commands(ws, response_finished, head)
-                    )
-                    conversation = asyncio.create_task(
-                        conversation_loop(model, head, args, response_finished)
-                    )
-
-                    try:
-                        # A Core deployment closes the old WebSocket. Stop
-                        # capturing immediately and establish a new session.
-                        done, _ = await asyncio.wait(
-                            {receiver, conversation},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task.cancelled():
-                                raise RuntimeError("Voice session task cancelled")
-                            exc = task.exception()
-                            if exc:
-                                raise exc
-                        print("[VOICE] Core connection closed; reconnecting.", flush=True)
-                    finally:
-                        receiver.cancel()
-                        conversation.cancel()
-                        await asyncio.gather(
-                            receiver, conversation, return_exceptions=True
-                        )
-                        await head.set("idle")
-
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                print(f"[VOICE] Connection lost: {exc!r}", flush=True)
-
-            print("[VOICE] Reconnecting in 3 seconds...", flush=True)
-            await asyncio.sleep(3)
+        await conversation_loop(model, head, args, response_finished, connection_state, local)
     finally:
+        socket_task.cancel()
+        await asyncio.gather(socket_task, return_exceptions=True)
         await head.close()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
