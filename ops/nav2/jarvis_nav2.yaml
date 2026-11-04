@@ -2,8 +2,9 @@
 # Maps and TF come from the EXISTING jarvis-mapping service (slam_toolbox+rf2o).
 # Nav2 controllers publish DIRECTLY to /cmd_vel. Drive remains DISARMED on boot.
 #
-# Initial footprint is deliberately conservative (circle radius 0.23m);
-# replace with measured footprint before unsupervised navigation.
+# Measured conservative body bounding box, relative to rear-axle base_link:
+# front +0.2032m (8in), rear -0.09525m (3.75in), half-width 0.073025m (2.875in).
+# Additional 0.01m padding is applied separately in both costmaps.
 # Actual travel speed is ~0.16m/s despite low requested velocity.
 #
 # This is an initial supervised configuration; no independent hardware E-stop
@@ -93,7 +94,8 @@ local_costmap:
       update_frequency: 5.0
       publish_frequency: 2.0
       transform_tolerance: 0.25
-      robot_radius: 0.23
+      footprint: "[[0.2032, 0.073025], [0.2032, -0.073025], [-0.09525, -0.073025], [-0.09525, 0.073025]]"
+      footprint_padding: 0.01
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -115,8 +117,8 @@ local_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
+        cost_scaling_factor: 5.0
       always_send_full_costmap: true
 
 global_costmap:
@@ -130,7 +132,8 @@ global_costmap:
       publish_frequency: 1.0
       transform_tolerance: 0.25
       track_unknown_space: true
-      robot_radius: 0.23
+      footprint: "[[0.2032, 0.073025], [0.2032, -0.073025], [-0.09525, -0.073025], [-0.09525, 0.073025]]"
+      footprint_padding: 0.01
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -156,6 +159,6 @@ global_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
+        cost_scaling_factor: 5.0
       always_send_full_costmap: true
