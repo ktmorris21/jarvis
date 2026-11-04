@@ -340,3 +340,16 @@ operator's separate disarm or physical cutoff when immediate cessation
 is required. The autonomous behavior was previously demonstrated
 locally; this new Core-to-ROS voice integration has not yet been
 hardware-tested.
+
+
+### Exploration progress in automatic Agent context
+
+The existing per-turn `get_robot_status` prefetch now includes an
+`exploration` member from the local ROS exploration status Trigger:
+`available`, `mode`, `goals_completed`, `consecutive_failures`,
+and `reason`. No extra model tool invocation is required for routine
+status questions. When the exploration service is unavailable, the
+`exploration` member says `available: false`, while the rest of the
+robot-status snapshot still succeeds. This is a Pi bridge-only change,
+so after pulling restart `jarvis-bridge@shadowfax.service`. No Railway
+code change is required for this particular snapshot enrichment.
