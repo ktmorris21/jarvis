@@ -31,8 +31,6 @@ COMMANDS = {
     "arm the motors": "arm",
     "disarm motors": "disarm",
     "disarm the motors": "disarm",
-    "motor status": "status",
-    "motors status": "status",
     "reboot": "reboot",
     "reboot jarvis": "reboot",
     "restart jarvis": "reboot",
@@ -112,12 +110,7 @@ class LocalCommands:
         if action in ("arm", "disarm"):
             await self._ros_armed(action == "arm")
             return "Motors armed." if action == "arm" else "Motors disarmed."
-        if action == "status":
-            # A dedicated status reader will be added after telemetry is exposed;
-            # do not infer armed state from service availability.
-            return "Motor status isn't available locally yet."
         if action in ("reboot", "poweroff"):
-            cmd = "reboot" if action == "reboot" else "poweroff"
             # Arrange the operation after the acknowledgement is played.
             return "Rebooting Jarvis." if action == "reboot" else "Powering down Jarvis."
         raise ValueError("Unexpected local command")
