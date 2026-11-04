@@ -9,7 +9,10 @@ import math
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import Path
-from nav2_msgs.action import ComputePathToPose
+from nav2_msgs.action import ComputePathToPose, NavigateToPose
+from action_msgs.msg import GoalStatus
+from sensor_msgs.msg import LaserScan
+from std_srvs.srv import Trigger, SetBool
 from rclpy.action import ActionClient
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener
@@ -28,7 +31,16 @@ class FrontierDetector(Node):
         self.declare_parameter("update_period_seconds", 3.0)
         self.declare_parameter("free_threshold", 20)
         self._latest_map = None
-        self._latest_stamp = None
+        self._map_received_at = None
+        self._scan_received_at = {"upper": None, "lower": None}
+        self._mode = "idle"  # Never autonomously drive on boot or after restart.
+        self._last_reason = "Not started"
+        self._failure_count = 0
+        self._completed_goals = 0
+        self._rejected_points = []
+        self._navigation_handle = None
+        self._navigation_pending = False
+        self._generation = 0
         self._planning = False
         self._candidates = []
         self._candidate_index = 0
@@ -40,6 +52,14 @@ class FrontierDetector(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._plan_client = ActionClient(self, ComputePathToPose, "/compute_path_to_pose")
+        self._nav_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+        self._disarm_client = self.create_client(SetBool, "/jarvis_drive/set_armed")
+        self.create_subscription(LaserScan, "/scan", lambda msg: self.on_scan("upper"), 10)
+        self.create_subscription(LaserScan, "/scan_lower", lambda msg: self.on_scan("lower"), 10)
+        self.create_service(Trigger, "/jarvis/exploration/start", self.start_exploration)
+        self.create_service(Trigger, "/jarvis/exploration/stop", self.stop_exploration)
+        self.create_service(Trigger, "/jarvis/exploration/status", self.exploration_status)
+        self.create_timer(0.25, self.check_exploration_health)
         self.declare_parameter("planning_interval_seconds", 20.0)
         self.declare_parameter("staging_distance_m", 0.35)
         self.declare_parameter("maximum_candidates_to_plan", 5)
@@ -56,6 +76,176 @@ class FrontierDetector(Node):
 
     def on_map(self, message):
         self._latest_map = message
+        self._map_received_at = time.monotonic()
+
+    def on_scan(self, which):
+        self._scan_received_at[which] = time.monotonic()
+
+    def healthy(self):
+        now = time.monotonic()
+        if self._map_received_at is None or now - self._map_received_at > 5.0:
+            return False, "Map updates unavailable or older than 5 seconds"
+        for name, seen in self._scan_received_at.items():
+            if seen is None or now - seen > 2.0:
+                return False, f"{name} LiDAR scan older than 2 seconds"
+        if self.robot_pose("map") is None:
+            return False, "Localization transform missing or older than 1 second"
+        return True, "OK"
+
+    def start_exploration(self, request, response):
+        if self._mode == "exploring":
+            response.success = False
+            response.message = "Already exploring"
+            return response
+        if self._navigation_pending or self._navigation_handle is not None or self._planning:
+            response.success = False
+            response.message = "Navigation or planning still settling; retry shortly"
+            return response
+        healthy, reason = self.healthy()
+        if not healthy or not self._nav_client.server_is_ready() or not self._plan_client.server_is_ready():
+            response.success = False
+            response.message = reason if not healthy else "Nav2 action servers not ready"
+            return response
+        self._generation += 1
+        self._mode = "exploring"
+        self._last_reason = "Exploration started; selecting frontier"
+        self._failure_count = 0
+        self._completed_goals = 0
+        self._rejected_points.clear()
+        self._next_batch = 0.0
+        response.success = True
+        response.message = "Exploration enabled; motors must be armed separately"
+        self.get_logger().warning("EXPLORATION STARTED by explicit ROS service command")
+        return response
+
+    def stop_exploration(self, request, response):
+        self.halt_exploration("Stopped by operator", disarm=True)
+        response.success = True
+        response.message = "Exploration stopped; cancel and disarm requested"
+        return response
+
+    def exploration_status(self, request, response):
+        response.success = True
+        response.message = (f"mode={self._mode}, goals_completed={self._completed_goals}, "
+                            f"consecutive_failures={self._failure_count}, "
+                            f"reason={self._last_reason}")
+        return response
+
+    def request_disarm(self):
+        if not self._disarm_client.service_is_ready():
+            self.get_logger().error("Drive disarm service unavailable; operator must cut motor power")
+            return
+        req = SetBool.Request()
+        req.data = False
+        future = self._disarm_client.call_async(req)
+        def reported(result_future):
+            try:
+                result = result_future.result()
+                if not result.success:
+                    self.get_logger().error(f"Drive disarm refused: {result.message}")
+            except Exception as exc:
+                self.get_logger().error(f"Drive disarm failed: {type(exc).__name__}")
+        future.add_done_callback(reported)
+
+    def halt_exploration(self, reason, disarm=True):
+        self._mode = "idle"
+        self._last_reason = reason
+        self._generation += 1
+        self._next_batch = time.monotonic() + 2.0
+        self.get_logger().warning(f"EXPLORATION HALTED: {reason}")
+        if self._navigation_handle is not None:
+            try:
+                self._navigation_handle.cancel_goal_async()
+            except Exception as exc:
+                self.get_logger().error(f"Nav2 cancellation failed: {type(exc).__name__}")
+        if disarm:
+            self.request_disarm()
+
+    def check_exploration_health(self):
+        if self._mode != "exploring":
+            return
+        healthy, reason = self.healthy()
+        if not healthy:
+            self.halt_exploration(reason)
+
+    def is_rejected(self, position):
+        return any(math.hypot(position.x - old_x, position.y - old_y) < 0.40
+                   for old_x, old_y in self._rejected_points)
+
+    def goal_failed(self, reason, position):
+        if self._mode != "exploring":
+            return
+        self._failure_count += 1
+        self._rejected_points.append((position.x, position.y))
+        self._last_reason = reason
+        self.get_logger().warning(
+            f"Exploration goal failed ({self._failure_count}/3): {reason}")
+        if self._failure_count >= 3:
+            self.halt_exploration("Three consecutive failed Nav2 goals")
+        else:
+            self._next_batch = 0.0
+
+    def send_navigation(self):
+        if self._mode != "exploring" or self._best is None:
+            return
+        healthy, reason = self.healthy()
+        if not healthy:
+            self.halt_exploration(reason)
+            return
+        _, length, path, stage, frontier, count = self._best
+        if self.is_rejected(stage):
+            return
+        angle = math.atan2(frontier.y - stage.y, frontier.x - stage.x)
+        from geometry_msgs.msg import Quaternion
+        heading = Quaternion(z=math.sin(angle / 2), w=math.cos(angle / 2))
+        goal = NavigateToPose.Goal()
+        goal.pose = self.make_pose(self._frame, stage, heading, self.get_clock())
+        self._navigation_pending = True
+        generation = self._generation
+        self._last_reason = f"Navigating to ({stage.x:.2f}, {stage.y:.2f})"
+        self.get_logger().warning(f"Sending Nav2 exploration goal: {self._last_reason}")
+        try:
+            future = self._nav_client.send_goal_async(goal)
+            future.add_done_callback(lambda f: self.on_navigation_accepted(f, generation, stage))
+        except Exception as exc:
+            self._navigation_pending = False
+            self.goal_failed(f"Nav2 goal send error: {type(exc).__name__}", stage)
+
+    def on_navigation_accepted(self, future, generation, position):
+        self._navigation_pending = False
+        try:
+            handle = future.result()
+            self._navigation_handle = handle if handle.accepted else None
+            if generation != self._generation or self._mode != "exploring":
+                if handle.accepted:
+                    handle.cancel_goal_async()
+                return
+            if not handle.accepted:
+                self.goal_failed("Nav2 rejected navigation goal", position)
+                return
+            handle.get_result_async().add_done_callback(
+                lambda f: self.on_navigation_result(f, generation, position))
+        except Exception as exc:
+            self.goal_failed(f"Nav2 goal acceptance error: {type(exc).__name__}", position)
+
+    def on_navigation_result(self, future, generation, position):
+        self._navigation_handle = None
+        if generation != self._generation or self._mode != "exploring":
+            return
+        try:
+            status = future.result().status
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self._completed_goals += 1
+                self._failure_count = 0
+                self._last_reason = f"Reached frontier {self._completed_goals}"
+                self.get_logger().info(self._last_reason)
+                # Wait for the map to incorporate newly visible space.
+                self._next_batch = time.monotonic() + 3.0
+                return
+            self.goal_failed(f"Nav2 returned status {status}", position)
+        except Exception as exc:
+            self.goal_failed(f"Nav2 result error: {type(exc).__name__}", position)
+
 
     @staticmethod
     def find_clusters(message, free_threshold=20, min_size=6, max_clusters=40):
@@ -246,7 +436,7 @@ class FrontierDetector(Node):
 
     def start_planning_preview(self, message, clusters):
         now = time.monotonic()
-        if self._planning or now < self._next_batch:
+        if self._planning or self._navigation_pending or self._navigation_handle is not None or now < self._next_batch:
             return
         self._next_batch = now + float(self.get_parameter("planning_interval_seconds").value)
         # Empty frontiers invalidate any previously rendered selection.
@@ -267,7 +457,7 @@ class FrontierDetector(Node):
                 continue
             goal_pos, frontier_pos = stage
             direct = math.hypot(goal_pos.x - position.x, goal_pos.y - position.y)
-            if direct < float(self.get_parameter("minimum_goal_distance_m").value):
+            if direct < float(self.get_parameter("minimum_goal_distance_m").value) or self.is_rejected(goal_pos):
                 continue
             # Prefer large frontiers while keeping travel reasonable; the
             # actual ranking only uses successfully computed Nav2 path lengths.
@@ -278,6 +468,8 @@ class FrontierDetector(Node):
         self._candidates = candidates[:max(0, limit)]
         if not self._candidates:
             self.get_logger().info("No frontier staging cells with clear known-free footprint")
+            if self._mode == "exploring":
+                self.halt_exploration("No eligible frontiers remain")
             return
         self._start_pose = self.make_pose(frame, position, orientation, self.get_clock())
         self._frame = frame
@@ -369,6 +561,8 @@ class FrontierDetector(Node):
         self._planning = False
         if self._best is None:
             self.get_logger().info("Preview: no valid Nav2 path among tested frontiers")
+            if self._mode == "exploring":
+                self.halt_exploration("No reachable frontier among checked candidates")
             return
         _, length, path, stage, frontier, count = self._best
         marker = Marker()
@@ -387,7 +581,10 @@ class FrontierDetector(Node):
         self._selected_path.publish(path)
         self.get_logger().info(
             f"Preview best frontier: cluster={count} cells, path={length:.2f}m, "
-            f"goal=({stage.x:.2f},{stage.y:.2f}); NO NAVIGATION COMMAND SENT")
+            f"goal=({stage.x:.2f},{stage.y:.2f}); "
+            f"exploration_mode={self._mode}")
+        if self._mode == "exploring":
+            self.send_navigation()
 
 
 def main():
