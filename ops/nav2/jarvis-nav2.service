@@ -1,0 +1,19 @@
+[Unit]
+Description=Jarvis ROS 2 Nav2 point-to-point navigation
+Wants=network-online.target jarvis-mapping@shadowfax.service jarvis-drive@shadowfax.service
+After=network-online.target jarvis-mapping@shadowfax.service jarvis-drive@shadowfax.service
+
+[Service]
+Type=simple
+User=shadowfax
+Group=shadowfax
+WorkingDirectory=/home/shadowfax/jarvis
+Environment=HOME=/home/shadowfax
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/shadowfax/ros2_ws/install/setup.bash && exec ros2 launch /home/shadowfax/jarvis/ops/nav2/navigation.launch.py'
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
