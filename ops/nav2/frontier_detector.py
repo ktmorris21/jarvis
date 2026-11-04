@@ -12,6 +12,7 @@ from nav_msgs.msg import Path
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from action_msgs.msg import GoalStatus
 from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 from std_srvs.srv import Trigger, SetBool
 from rclpy.action import ActionClient
 from rclpy.time import Time
@@ -54,8 +55,8 @@ class FrontierDetector(Node):
         self._plan_client = ActionClient(self, ComputePathToPose, "/compute_path_to_pose")
         self._nav_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self._disarm_client = self.create_client(SetBool, "/jarvis_drive/set_armed")
-        self.create_subscription(LaserScan, "/scan", lambda msg: self.on_scan("upper"), 10)
-        self.create_subscription(LaserScan, "/scan_lower", lambda msg: self.on_scan("lower"), 10)
+        self.create_subscription(LaserScan, "/scan", lambda msg: self.on_scan("upper"), qos_profile_sensor_data)
+        self.create_subscription(LaserScan, "/scan_lower", lambda msg: self.on_scan("lower"), qos_profile_sensor_data)
         self.create_service(Trigger, "/jarvis/exploration/start", self.start_exploration)
         self.create_service(Trigger, "/jarvis/exploration/stop", self.stop_exploration)
         self.create_service(Trigger, "/jarvis/exploration/status", self.exploration_status)
@@ -83,8 +84,8 @@ class FrontierDetector(Node):
 
     def healthy(self):
         now = time.monotonic()
-        if self._map_received_at is None or now - self._map_received_at > 5.0:
-            return False, "Map updates unavailable or older than 5 seconds"
+        if self._map_received_at is None or now - self._map_received_at > 20.0:
+            return False, "Map updates unavailable or older than 20 seconds"
         for name, seen in self._scan_received_at.items():
             if seen is None or now - seen > 2.0:
                 return False, f"{name} LiDAR scan older than 2 seconds"
@@ -97,9 +98,9 @@ class FrontierDetector(Node):
             response.success = False
             response.message = "Already exploring"
             return response
-        if self._navigation_pending or self._navigation_handle is not None or self._planning:
+        if self._navigation_pending or self._navigation_handle is not None:
             response.success = False
-            response.message = "Navigation or planning still settling; retry shortly"
+            response.message = "Navigation still settling; retry shortly"
             return response
         healthy, reason = self.healthy()
         if not healthy or not self._nav_client.server_is_ready() or not self._plan_client.server_is_ready():
