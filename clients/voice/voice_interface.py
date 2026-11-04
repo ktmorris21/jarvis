@@ -250,45 +250,53 @@ async def listen_for_command(model, head):
         stop_microphone(proc)
 
 
-async def listen_for_followup(head):
-    """Capture a follow-up without requiring the wake word.
+async def listen_for_followup(head, deadline):
+    """Listen until a genuine follow-up starts, or the fixed deadline expires.
 
-    Stop if no speech starts within the follow-up window. The microphone is
-    started only AFTER Jarvis finishes speaking to avoid recording its own TTS.
+    Require multiple consecutive above-threshold frames to ignore one-off pops
+    immediately after playback. A no_speech result must not restart the window.
     """
     frame_seconds = CHUNK / RATE
-    pre_roll = deque(maxlen=max(1, int(0.4 / frame_seconds)))
+    pre_roll = deque(maxlen=max(1, int(0.5 / frame_seconds)))
     ambient_levels = deque(maxlen=40)
+    onset_frames = []
     frames = []
     speech_started = False
-    elapsed = 0.0
     last_voice = 0.0
+    speech_onset = 0.0
+    elapsed = 0.0
+    threshold = 350.0
     proc = start_microphone()
     await head.set("listening")
-    print(f"[FOLLOWUP] Listening for {FOLLOWUP_WAIT_SECONDS:.1f}s without wake word...", flush=True)
+    remaining = max(0.0, deadline - time.monotonic())
+    print(f"[FOLLOWUP] Listening up to {remaining:.1f}s without wake word...", flush=True)
     try:
-        while elapsed < FOLLOWUP_WAIT_SECONDS + FOLLOWUP_MAX_SPEECH_SECONDS:
+        while True:
+            if not speech_started and time.monotonic() >= deadline:
+                print("[FOLLOWUP] Silence timeout; returning to wake-word mode", flush=True)
+                return None
             data = await read_chunk(proc)
             elapsed += frame_seconds
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
             rms = float(np.sqrt(np.mean(samples ** 2)))
             if not speech_started:
-                # Estimate the ambient floor from early frames; exclude the
-                # current frame so a new speech onset doesn't raise its threshold.
                 baseline = float(np.percentile(ambient_levels, 35)) if ambient_levels else 0.0
                 threshold = max(350.0, baseline * 3.0)
                 if rms >= threshold:
-                    speech_started = True
-                    frames.extend(pre_roll)
-                    frames.append(data)
-                    last_voice = elapsed
-                    speech_onset = elapsed
+                    onset_frames.append(data)
+                    if len(onset_frames) >= 3:  # 240 ms sustained speech onset
+                        speech_started = True
+                        speech_onset = elapsed - (len(onset_frames)-1) * frame_seconds
+                        last_voice = elapsed
+                        frames.extend(pre_roll)
+                        frames.extend(onset_frames)
+                        print("[FOLLOWUP] Speech onset confirmed", flush=True)
                 else:
+                    # Unconfirmed transient gets discarded into the pre-roll.
+                    pre_roll.extend(onset_frames)
+                    onset_frames.clear()
                     pre_roll.append(data)
                     ambient_levels.append(rms)
-                    if elapsed >= FOLLOWUP_WAIT_SECONDS:
-                        print("[FOLLOWUP] Silence timeout; returning to wake-word mode", flush=True)
-                        return None
             else:
                 frames.append(data)
                 if rms >= threshold:
@@ -298,8 +306,6 @@ async def listen_for_followup(head):
                 if elapsed - speech_onset >= FOLLOWUP_MAX_SPEECH_SECONDS:
                     break
 
-        if not speech_started:
-            return None
         print(f"[FOLLOWUP] Captured {len(frames) * frame_seconds:.2f}s", flush=True)
         return make_wav(b"".join(frames))
     finally:
@@ -481,10 +487,11 @@ async def core_socket_worker(args, head, response_finished, connection_state):
 async def conversation_loop(model, head, args, response_finished, connection_state, local):
     """Wake once, then accept short follow-up turns until silence/sign-off."""
     followup = False
+    followup_deadline = 0.0
     while True:
         if followup:
             try:
-                wav = await listen_for_followup(head)
+                wav = await listen_for_followup(head, followup_deadline)
                 if wav is None:
                     followup = False
                     await head.set("idle")
@@ -531,6 +538,8 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                     # A local acknowledgement/confirmation supports another
                     # utterance; failed playback already reset followup.
                     followup = playback_ok
+                    if followup:
+                        followup_deadline = time.monotonic() + FOLLOWUP_WAIT_SECONDS
                 continue
         except Exception as exc:
             print("[LOCAL] Recognition failed:", repr(exc), flush=True)
@@ -551,12 +560,16 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                   f"{time.monotonic()-response_finished.sent_at:.2f}s", flush=True)
             if result.get("status") == "no_speech":
                 print("No speech recognized.")
-                followup = False
+                # Ignore ambient/noise captures without ending the follow-up.
+                # Use the original deadline so noise cannot hold the mic open forever.
+                followup = followup and time.monotonic() < followup_deadline
                 continue
             try:
                 await asyncio.wait_for(response_finished.wait(), timeout=45)
                 # Open the mic only after the whole TTS playback finishes.
                 followup = response_finished.played and connection_state["ready"]
+                if followup:
+                    followup_deadline = time.monotonic() + FOLLOWUP_WAIT_SECONDS
             except asyncio.TimeoutError:
                 print("No speaker response received within 45 seconds.", flush=True)
                 followup = False
