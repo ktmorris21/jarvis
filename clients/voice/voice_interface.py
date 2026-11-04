@@ -29,6 +29,10 @@ RATE = 16000
 CHUNK = 1280
 THRESHOLD = 0.5
 COMMAND_SECONDS = 5
+# Follow-up window begins after spoken playback, never while Jarvis speaks.
+FOLLOWUP_WAIT_SECONDS = float(os.environ.get("JARVIS_FOLLOWUP_WAIT_SECONDS", "8"))
+FOLLOWUP_END_SILENCE_SECONDS = 0.9
+FOLLOWUP_MAX_SPEECH_SECONDS = 12.0
 INTERFACE_ID = "picar-voice"
 
 
@@ -246,6 +250,62 @@ async def listen_for_command(model, head):
         stop_microphone(proc)
 
 
+async def listen_for_followup(head):
+    """Capture a follow-up without requiring the wake word.
+
+    Stop if no speech starts within the follow-up window. The microphone is
+    started only AFTER Jarvis finishes speaking to avoid recording its own TTS.
+    """
+    frame_seconds = CHUNK / RATE
+    pre_roll = deque(maxlen=max(1, int(0.4 / frame_seconds)))
+    ambient_levels = deque(maxlen=40)
+    frames = []
+    speech_started = False
+    elapsed = 0.0
+    last_voice = 0.0
+    proc = start_microphone()
+    await head.set("listening")
+    print(f"[FOLLOWUP] Listening for {FOLLOWUP_WAIT_SECONDS:.1f}s without wake word...", flush=True)
+    try:
+        while elapsed < FOLLOWUP_WAIT_SECONDS + FOLLOWUP_MAX_SPEECH_SECONDS:
+            data = await read_chunk(proc)
+            elapsed += frame_seconds
+            samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+            rms = float(np.sqrt(np.mean(samples ** 2)))
+            if not speech_started:
+                # Estimate the ambient floor from early frames; exclude the
+                # current frame so a new speech onset doesn't raise its threshold.
+                baseline = float(np.percentile(ambient_levels, 35)) if ambient_levels else 0.0
+                threshold = max(350.0, baseline * 3.0)
+                if rms >= threshold:
+                    speech_started = True
+                    frames.extend(pre_roll)
+                    frames.append(data)
+                    last_voice = elapsed
+                    speech_onset = elapsed
+                else:
+                    pre_roll.append(data)
+                    ambient_levels.append(rms)
+                    if elapsed >= FOLLOWUP_WAIT_SECONDS:
+                        print("[FOLLOWUP] Silence timeout; returning to wake-word mode", flush=True)
+                        return None
+            else:
+                frames.append(data)
+                if rms >= threshold:
+                    last_voice = elapsed
+                if elapsed - last_voice >= FOLLOWUP_END_SILENCE_SECONDS:
+                    break
+                if elapsed - speech_onset >= FOLLOWUP_MAX_SPEECH_SECONDS:
+                    break
+
+        if not speech_started:
+            return None
+        print(f"[FOLLOWUP] Captured {len(frames) * frame_seconds:.2f}s", flush=True)
+        return make_wav(b"".join(frames))
+    finally:
+        stop_microphone(proc)
+
+
 async def play_audio(encoded):
     started = time.monotonic()
     data = base64.b64decode(encoded)
@@ -360,6 +420,7 @@ async def receive_commands(ws, response_finished, head):
             f"after upload began",
             flush=True,
         )
+        response_finished.played = (status == "complete")
         response_finished.set()
 
 
@@ -412,27 +473,52 @@ async def core_socket_worker(args, head, response_finished, connection_state):
             print(f"[VOICE] Core unavailable: {exc!r}", flush=True)
         finally:
             connection_state["ready"] = False
+            response_finished.played = False
             response_finished.set()
         await asyncio.sleep(3)
 
 
 async def conversation_loop(model, head, args, response_finished, connection_state, local):
-    """Listen continuously; intercept known commands before Core upload."""
+    """Wake once, then accept short follow-up turns until silence/sign-off."""
+    followup = False
     while True:
-        wav = await listen_for_command(model, head)
+        if followup:
+            try:
+                wav = await listen_for_followup(head)
+                if wav is None:
+                    followup = False
+                    await head.set("idle")
+                    continue
+                if await local.is_closing_phrase(wav):
+                    followup = False
+                    await head.set("idle")
+                    print("[FOLLOWUP] Conversation closed", flush=True)
+                    continue
+            except Exception as exc:
+                print("[FOLLOWUP] Listening failed:", repr(exc), flush=True)
+                followup = False
+                await head.set("idle")
+                continue
+        else:
+            wav = await listen_for_command(model, head)
+
         try:
             handled, reply, power_action = await local.act(wav)
             if handled:
                 print("[LOCAL]", reply, flush=True)
                 await head.set("speaking")
+                playback_ok = False
                 try:
                     await play_local_response(reply, device=DEVICE, fallback=play_piper)
+                    playback_ok = True
                 except Exception as exc:
                     print("[LOCAL] Audio playback failed:", repr(exc), flush=True)
+                    followup = False
                     power_action = None
                 finally:
                     await head.set("idle")
                 if power_action:
+                    followup = False
                     try:
                         await local.system_action(power_action)
                     except Exception as exc:
@@ -441,17 +527,23 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                             await play_local_response("Power command failed.", device=DEVICE, fallback=play_piper)
                         except Exception:
                             pass
+                elif reply:
+                    # A local acknowledgement/confirmation supports another
+                    # utterance; failed playback already reset followup.
+                    followup = playback_ok
                 continue
         except Exception as exc:
             print("[LOCAL] Recognition failed:", repr(exc), flush=True)
 
         if not connection_state["ready"]:
             print("[VOICE] Core offline; ordinary conversation unavailable", flush=True)
+            followup = False
             await head.set("idle")
             continue
 
         await head.set("thinking")
         response_finished.clear()
+        response_finished.played = False
         response_finished.sent_at = time.monotonic()
         try:
             result = await send_utterance(args.url, args.token, wav)
@@ -459,13 +551,18 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                   f"{time.monotonic()-response_finished.sent_at:.2f}s", flush=True)
             if result.get("status") == "no_speech":
                 print("No speech recognized.")
+                followup = False
                 continue
             try:
                 await asyncio.wait_for(response_finished.wait(), timeout=45)
+                # Open the mic only after the whole TTS playback finishes.
+                followup = response_finished.played and connection_state["ready"]
             except asyncio.TimeoutError:
                 print("No speaker response received within 45 seconds.", flush=True)
+                followup = False
         except Exception as exc:
             print("Core request failed:", repr(exc), flush=True)
+            followup = False
         finally:
             await head.set("idle")
 
