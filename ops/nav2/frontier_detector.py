@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only frontier detection and Nav2 path verification.
+"""Frontier detection, path preview, and explicitly enabled Nav2 exploration.
 
-ComputePathToPose only: never call NavigateToPose, publish cmd_vel, or arm motors.
+Idle by default. Uses NavigateToPose only after explicit start; never arms
+motors or publishes /cmd_vel. ROS services provide start, stop and status.
 """
 from collections import deque
 import math
@@ -73,7 +74,7 @@ class FrontierDetector(Node):
         self._selected_path = self.create_publisher(Path, "/jarvis/exploration/selected_path", qos)
         self.create_timer(float(self.get_parameter("update_period_seconds").value),
                           self.publish_frontiers)
-        self.get_logger().info("Frontier planning preview enabled (READ ONLY): /map + ComputePathToPose")
+        self.get_logger().info("Frontier preview active; autonomous navigation DISABLED until explicit start")
 
     def on_map(self, message):
         self._latest_map = message
@@ -363,7 +364,7 @@ class FrontierDetector(Node):
         self.start_planning_preview(message, clusters)
         self.get_logger().info(
             f"Frontier clusters={len(clusters)} "
-            f"(largest cells={len(clusters[0]) if clusters else 0}); visualization only")
+            f"(largest cells={len(clusters[0]) if clusters else 0}); mode={self._mode}")
 
 
     @staticmethod
@@ -483,7 +484,7 @@ class FrontierDetector(Node):
         self._evaluated = []
         self._planning = True
         self._batch_started = now
-        self.get_logger().info(f"Checking {len(self._candidates)} frontier paths with Nav2 (no driving)")
+        self.get_logger().info(f"Checking {len(self._candidates)} frontier paths with Nav2 (planning-only action)")
         self.plan_next()
 
     def plan_next(self):
