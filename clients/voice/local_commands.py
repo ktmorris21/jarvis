@@ -57,6 +57,22 @@ LOCAL_GRAMMAR = sorted(set(
     for variant in (phrase, "jarvis " + phrase, "hey jarvis " + phrase)
 )) + ["[unk]"]
 
+# Explicit end-of-conversation phrases recognized locally, without a Core roundtrip.
+# Plain "thanks" is deliberately not a closer: it can be part of a follow-up.
+CLOSING_PHRASES = (
+    "that's all",
+    "that's all thank you",
+    "that is all",
+    "that is all thank you",
+    "thank you that's all",
+    "goodbye",
+    "goodbye jarvis",
+    "good night jarvis",
+    "stop listening",
+    "end conversation",
+)
+CLOSING_GRAMMAR = list(CLOSING_PHRASES) + ["[unk]"]
+
 
 
 class LocalCommands:
@@ -80,12 +96,12 @@ class LocalCommands:
     def available(self):
         return self._recognizer_model is not None
 
-    def transcribe(self, wav):
+    def transcribe(self, wav, grammar=None):
         from vosk import KaldiRecognizer
         with wave.open(BytesIO(wav), "rb") as wf:
             if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
                 raise ValueError("Expected 16 kHz mono 16-bit PCM")
-            rec = KaldiRecognizer(self._recognizer_model, 16000, json.dumps(LOCAL_GRAMMAR))
+            rec = KaldiRecognizer(self._recognizer_model, 16000, json.dumps(grammar or LOCAL_GRAMMAR))
             while True:
                 block = wf.readframes(4000)
                 if not block:
@@ -93,6 +109,16 @@ class LocalCommands:
                 rec.AcceptWaveform(block)
         result = json.loads(rec.FinalResult())
         return result.get("text", "")
+
+    async def is_closing_phrase(self, wav):
+        """Check for an explicit conversational sign-off during follow-up mode."""
+        if not self.available:
+            return False
+        transcript = await asyncio.to_thread(self.transcribe, wav, CLOSING_GRAMMAR)
+        closing = normalize(transcript) in {normalize(p) for p in CLOSING_PHRASES}
+        if closing:
+            print(f"[FOLLOWUP] Closing phrase recognized: {transcript!r}", flush=True)
+        return closing
 
     async def _ros_armed(self, armed):
         # Restrict to fixed trusted service and fixed boolean request.
