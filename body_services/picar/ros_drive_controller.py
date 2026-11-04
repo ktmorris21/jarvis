@@ -97,9 +97,9 @@ class RosDriveController(Node):
             self.armed_at = time.monotonic()
             self.last_valid_at = None
             self.timed_out = False
-            self.get_logger().warning("ARMED for supervised testing (30s to first command)")
+            self.get_logger().warning("ARMED: remains armed through ordinary stops and timeouts")
             response.success = True
-            response.message = "Armed; stops and timeouts keep arm state; disarm explicitly"
+            response.message = "Armed; remains armed until disarm, fault or service restart"
         except Exception as exc:
             self.disarm("arming failure")
             response.success = False
@@ -155,10 +155,6 @@ class RosDriveController(Node):
 
     def on_watchdog(self):
         now = time.monotonic()
-        if self.hw is not None and self.armed and self.last_valid_at is None:
-            if self.armed_at is not None and now - self.armed_at > 30.0:
-                self.disarm("no first command within 30 seconds")
-            return
         if self.last_valid_at is None or self.timed_out:
             return
         timeout = float(self.get_parameter("cmd_timeout_s").value)
