@@ -36,6 +36,21 @@ CORE_TOOLS = {
             "confirmation": {"type": "string", "enum": ["REBOOT JARVIS NOW"]},
         }, "required": ["confirmation"], "additionalProperties": False},
     },
+    "explore": {
+        "type": "function", "name": "explore",
+        "description": "Start supervised autonomous frontier exploration on my robot using ROS/Nav2. Only call after the user explicitly asks me to explore or start exploring. This does NOT arm motors; motor arming remains a separate operator command. Returns immediately after requesting start, not after exploration finishes.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "stop_exploring": {
+        "type": "function", "name": "stop_exploring",
+        "description": "Stop my ongoing frontier exploration when the user asks. Cancels exploration Nav2 goals, but DOES NOT disarm the motors. This does not cancel navigation goals started by other interfaces.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    "exploration_status": {
+        "type": "function", "name": "exploration_status",
+        "description": "Get live frontier-exploration mode, completed goal count, failure count and latest reason from my ROS exploration manager. Use when the user asks about exploration progress.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
     "get_robot_status": {
         "type": "function", "name": "get_robot_status",
         "description": "Get current robot, ROS, LiDAR and map health.",
@@ -162,6 +177,11 @@ async def execute_tool(name: str, args: dict):
             raise HTTPException(400, "turtle_status takes no arguments")
         await asyncio.sleep(10)
         return {"status": "The turtle is happy.", "delay_seconds": 10}
+    if name in {"explore", "stop_exploring", "exploration_status"}:
+        if args:
+            raise HTTPException(400, f"{name} takes no arguments")
+        from .agent_runtime import exploration_command_data
+        return await exploration_command_data(name)
     if name == "get_robot_status":
         if args:
             raise HTTPException(400, "get_robot_status takes no arguments")
