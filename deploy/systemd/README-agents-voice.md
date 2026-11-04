@@ -63,5 +63,35 @@ for a final user-facing answer. Preserve the session lock and reliable completio
 
 Known follow-ups: immediate locally cached wake acknowledgement; wake-free
 follow-ups; interruption, TTS preloading, first-sentence latency instrumentation;
-restore the separate boot greeting. Realtime and chained listener must never
+Realtime and chained listener must never
 own the microphone simultaneously.
+
+## Once-per-boot voice readiness announcement
+
+The Agents voice client restores the previous Realtime greeting **"Jarvis online
+and ready."**. After its local wake-word model and head controller are
+initialized, and before the first microphone capture, it plays this greeting
+locally via the cached WAV, without any Core or Agent request. This indicates
+**voice readiness**, not a health check of mapping, LiDAR or navigation.
+
+The existing `clients/voice/boot_notice.py` compares the Linux kernel boot ID
+to a marker in `/tmp`, shared with the old Realtime service. A voice service
+restart during the same boot does not repeat the announcement; a physical
+reboot does. The marker is written only after successful playback. A playback
+failure is logged and does not prevent the wake listener from starting.
+
+Deployment on the Pi:
+
+```bash
+cd ~/jarvis
+git pull --ff-only
+.venv-voice/bin/python clients/voice/local_audio.py generate
+python3 -m py_compile clients/voice/voice_interface.py clients/voice/local_audio.py
+sudo systemctl restart jarvis-agents-voice.service
+journalctl -u jarvis-agents-voice.service -n 30 --no-pager
+```
+
+The restart will play the greeting if it has not previously been announced
+this physical boot, otherwise logs `[BOOT] Readiness announcement already played
+this boot`. On a subsequent Pi reboot the greeting should play automatically.
+No need to restart the drive/mapping services solely for this update.
