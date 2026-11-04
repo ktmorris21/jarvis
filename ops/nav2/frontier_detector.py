@@ -14,7 +14,7 @@ from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from action_msgs.msg import GoalStatus
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
-from std_srvs.srv import Trigger, SetBool
+from std_srvs.srv import Trigger
 from rclpy.action import ActionClient
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener
@@ -55,7 +55,6 @@ class FrontierDetector(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._plan_client = ActionClient(self, ComputePathToPose, "/compute_path_to_pose")
         self._nav_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
-        self._disarm_client = self.create_client(SetBool, "/jarvis_drive/set_armed")
         self.create_subscription(LaserScan, "/scan", lambda msg: self.on_scan("upper"), qos_profile_sensor_data)
         self.create_subscription(LaserScan, "/scan_lower", lambda msg: self.on_scan("lower"), qos_profile_sensor_data)
         self.create_service(Trigger, "/jarvis/exploration/start", self.start_exploration)
@@ -122,9 +121,9 @@ class FrontierDetector(Node):
         return response
 
     def stop_exploration(self, request, response):
-        self.halt_exploration("Stopped by operator", disarm=True)
+        self.halt_exploration("Stopped by operator")
         response.success = True
-        response.message = "Exploration stopped; cancel and disarm requested"
+        response.message = "Exploration stopped; Nav2 cancellation requested; motor arm state unchanged"
         return response
 
     def exploration_status(self, request, response):
@@ -134,23 +133,12 @@ class FrontierDetector(Node):
                             f"reason={self._last_reason}")
         return response
 
-    def request_disarm(self):
-        if not self._disarm_client.service_is_ready():
-            self.get_logger().error("Drive disarm service unavailable; operator must cut motor power")
-            return
-        req = SetBool.Request()
-        req.data = False
-        future = self._disarm_client.call_async(req)
-        def reported(result_future):
-            try:
-                result = result_future.result()
-                if not result.success:
-                    self.get_logger().error(f"Drive disarm refused: {result.message}")
-            except Exception as exc:
-                self.get_logger().error(f"Drive disarm failed: {type(exc).__name__}")
-        future.add_done_callback(reported)
+    def halt_exploration(self, reason):
+        """Cancel this explorer's Nav2 goal without altering motor arm state.
 
-    def halt_exploration(self, reason, disarm=True):
+        The existing drive watchdog stops the motors after Nav2 stops sending
+        velocity commands. Arming and disarming are operator-owned controls.
+        """
         self._mode = "idle"
         self._last_reason = reason
         self._generation += 1
@@ -161,8 +149,6 @@ class FrontierDetector(Node):
                 self._navigation_handle.cancel_goal_async()
             except Exception as exc:
                 self.get_logger().error(f"Nav2 cancellation failed: {type(exc).__name__}")
-        if disarm:
-            self.request_disarm()
 
     def check_exploration_health(self):
         if self._mode != "exploring":
