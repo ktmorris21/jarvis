@@ -21,6 +21,7 @@ import websockets
 from openwakeword.model import Model
 from local_commands import LocalCommands
 from local_audio import play_local_response
+from boot_notice import BOOT_GREETING, needs_boot_announcement, mark_boot_announced
 
 
 DEVICE = "plughw:CARD=J710,DEV=0"
@@ -469,11 +470,34 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
             await head.set("idle")
 
 
+async def speak_boot_announcement(head):
+    """Announce readiness once per physical boot, without involving Core.
+
+    Do not mark the boot announced until playback has completed. An unavailable
+    audio device must not prevent the listener from starting.
+    """
+    try:
+        boot_id = needs_boot_announcement()
+        if boot_id is None:
+            print("[BOOT] Readiness announcement already played this boot", flush=True)
+            return
+        await head.set("speaking")
+        try:
+            await play_local_response(BOOT_GREETING, device=DEVICE, fallback=play_piper)
+            mark_boot_announced(boot_id)
+            print("[BOOT] Announced: " + BOOT_GREETING, flush=True)
+        finally:
+            await head.set("idle")
+    except Exception as exc:
+        print("[BOOT] Readiness announcement failed: " + repr(exc), flush=True)
+
+
 async def main(args):
     model = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
     local = LocalCommands()
     head = HeadExpressions()
     await head.start()
+    await speak_boot_announcement(head)
     response_finished = asyncio.Event()
     response_finished.sent_at = time.monotonic()
     connection_state = {"ready": False}
