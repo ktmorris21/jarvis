@@ -496,6 +496,9 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                     followup = False
                     await head.set("idle")
                     continue
+                # Audio capture is finished: reflect that immediately, before
+                # offline sign-off recognition or local command processing.
+                await head.set("thinking")
                 if await local.is_closing_phrase(wav):
                     followup = False
                     await head.set("idle")
@@ -508,6 +511,8 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                 continue
         else:
             wav = await listen_for_command(model, head)
+            # Don't leave the head in listening posture while Vosk works.
+            await head.set("thinking")
 
         try:
             handled, reply, power_action = await local.act(wav)
@@ -550,7 +555,6 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
             await head.set("idle")
             continue
 
-        await head.set("thinking")
         response_finished.clear()
         response_finished.played = False
         response_finished.sent_at = time.monotonic()
