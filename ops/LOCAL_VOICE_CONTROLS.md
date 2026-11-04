@@ -107,3 +107,50 @@ test reboot or shutdown while motion is possible.
 - The PiCar-X hardware library's existing motor PWM mapping is unchanged.
 - The current mapping/Nav2 stack does not yet implement dual-LiDAR collision
   prevention or an independent physical E-stop.
+
+## Cached local speech responses
+
+Local Pi-control replies now use pre-rendered WAV audio files to avoid launching
+Piper and reloading the speech model after every voice command. The ordinary
+Agent responses still use the existing pipeline. The cache is stored at
+`~/jarvis/cache/local_voice/` by default and is ignored by Git because its
+files are WAV audio. Do not commit generated audio files.
+
+After pulling the new code onto the Pi, generate the responses **once** using
+the same voice environment used by the running service:
+
+```bash
+cd ~/jarvis
+.venv-voice/bin/python clients/voice/local_audio.py generate
+```
+
+The generator reads `JARVIS_PIPER_VOICE` and `JARVIS_PIPER_BIN` if set; by
+default it uses the existing Alan medium voice and `.venv-voice/bin/piper`.
+If you have customized either variable in `/etc/jarvis/voice.env`, provide
+those same values when running the generator. If you later change Piper voices,
+regenerate the cache.
+
+Then validate and restart **voice only** (drive does not need a restart):
+
+```bash
+python3 -m py_compile clients/voice/local_audio.py clients/voice/voice_interface.py
+sudo systemctl restart jarvis-agents-voice.service
+journalctl -u jarvis-agents-voice.service -f
+```
+
+As a safe test, say "Hey Jarvis, arm motors" but **do not confirm**.
+Expect a quick "Say confirm arm motors." and a log line similar to:
+
+```text
+[LOCAL AUDIO] Cache hit: 'Say confirm arm motors.'
+```
+
+The prompt will expire after 20 seconds and motors remain disarmed.
+If the cached file is absent, corrupt, or cannot be played, the client logs a
+cache miss/playback failure and falls back to the normal Piper response. For
+power commands, the existing rule remains: the actual reboot/shutdown is not
+issued unless acknowledgement audio playback succeeds.
+
+Piper generation is deliberately an explicit setup operation instead of a
+boot-time activity, so service startup stays predictable and there is no
+per-utterance synthesis cost on cache hits.
