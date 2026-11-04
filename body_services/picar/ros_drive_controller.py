@@ -2,7 +2,8 @@
 
 By default, this is a hardware-free dry run. Hardware access requires two
 explicit startup flags. Hardware mode always starts DISARMED and never
-automatically re-arms after a service restart. Ordinary stop and command timeout\nstop the motors but retain the armed state until disarmed or a fault.
+automatically re-arms after a service restart. Ordinary stop and command timeout
+stop the motors but retain the armed state until disarmed or a fault.
 
 ROS interface:
   /cmd_vel               geometry_msgs/msg/Twist
@@ -131,7 +132,9 @@ class RosDriveController(Node):
             steer_deg = angle * steering_sign
             if abs(v) < 1e-9:
                 if self.hw is not None:
-                    self.stop("zero velocity command")\n                    self.last_valid_at = None\n                    self.timed_out = False
+                    self.stop("zero velocity command")
+                    self.last_valid_at = None
+                    self.timed_out = False
                 else:
                     self.stop("zero velocity")
                     self.last_valid_at = None
@@ -159,7 +162,8 @@ class RosDriveController(Node):
             return
         timeout = float(self.get_parameter("cmd_timeout_s").value)
         if not math.isfinite(timeout) or timeout <= 0 or now - self.last_valid_at > timeout:
-            self.stop("command watchdog expired")\n            self.last_valid_at = None
+            self.stop("command watchdog expired")
+            self.last_valid_at = None
 
     def destroy_node(self):
         try:
