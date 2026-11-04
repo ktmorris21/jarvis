@@ -57,21 +57,40 @@ LOCAL_GRAMMAR = sorted(set(
     for variant in (phrase, "jarvis " + phrase, "hey jarvis " + phrase)
 )) + ["[unk]"]
 
-# Explicit end-of-conversation phrases recognized locally, without a Core roundtrip.
-# Plain "thanks" is deliberately not a closer: it can be part of a follow-up.
+# Explicit end-of-conversation phrases recognized locally, without Core.
+# Exact full-utterance matches only: never cut off a longer spoken question.
+# Vosk often emits expanded forms ("that will" rather than "that'll").
 CLOSING_PHRASES = (
+    "thank you",
+    "thanks",
+    "thanks jarvis",
+    "thank you jarvis",
     "that's all",
     "that's all thank you",
     "that is all",
     "that is all thank you",
+    "that'll be all",
+    "that'll be all thank you",
+    "that will be all",
+    "that will be all thank you",
+    "that be all",
     "thank you that's all",
+    "thank you that will be all",
     "goodbye",
     "goodbye jarvis",
     "good night jarvis",
     "stop listening",
     "end conversation",
 )
-CLOSING_GRAMMAR = list(CLOSING_PHRASES) + ["[unk]"]
+# Vosk grammar entries need plain spoken words, not apostrophe-normalized
+# tokens. Add explicit expanded equivalents for contracted phrases.
+CLOSING_GRAMMAR = sorted(set(CLOSING_PHRASES) |
+    {"that ll be all", "that ll be all thank you",
+     "that s all", "that s all thank you"}) + ["[unk]"]
+CLOSING_NORMALIZED = frozenset(normalize(phrase) for phrase in CLOSING_PHRASES) | {
+    "that ll be all", "that ll be all thank you",
+    "that s all", "that s all thank you",
+}
 
 
 
@@ -101,7 +120,10 @@ class LocalCommands:
         with wave.open(BytesIO(wav), "rb") as wf:
             if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
                 raise ValueError("Expected 16 kHz mono 16-bit PCM")
-            rec = KaldiRecognizer(self._recognizer_model, 16000, json.dumps(grammar or LOCAL_GRAMMAR))
+            grammar_json = json.dumps(grammar) if grammar is not None else None
+            rec = (KaldiRecognizer(self._recognizer_model, 16000, grammar_json)
+                   if grammar_json is not None
+                   else KaldiRecognizer(self._recognizer_model, 16000))
             while True:
                 block = wf.readframes(4000)
                 if not block:
@@ -111,13 +133,19 @@ class LocalCommands:
         return result.get("text", "")
 
     async def is_closing_phrase(self, wav):
-        """Check for an explicit conversational sign-off during follow-up mode."""
+        """Match exact full-utterance closers; never send recognized closers to Core."""
         if not self.available:
             return False
-        transcript = await asyncio.to_thread(self.transcribe, wav, CLOSING_GRAMMAR)
-        closing = normalize(transcript) in {normalize(p) for p in CLOSING_PHRASES}
-        if closing:
-            print(f"[FOLLOWUP] Closing phrase recognized: {transcript!r}", flush=True)
+        narrow = await asyncio.to_thread(self.transcribe, wav, CLOSING_GRAMMAR)
+        closing = normalize(narrow) in CLOSING_NORMALIZED
+        if not closing:
+            # Restricted Vosk may classify real short phrases as [unk].
+            # Try the unrestricted transcript too, but keep strict exact matching.
+            free = await asyncio.to_thread(self.transcribe, wav, None)
+            closing = normalize(free) in CLOSING_NORMALIZED
+            print(f"[FOLLOWUP] Closer recognition narrow={narrow!r} free={free!r} matched={closing}", flush=True)
+        else:
+            print(f"[FOLLOWUP] Closing phrase recognized: {narrow!r}", flush=True)
         return closing
 
     async def _ros_armed(self, armed):
