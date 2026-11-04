@@ -38,7 +38,7 @@ ros2 topic info /cmd_vel --verbose
 ```
 
 For the initial path calculation check, leave the motors **disarmed**.
-In RViz, select the Nav2 Goal tool and choose a nearby explored free area.
+In RViz, use **2D Goal Pose** (confirmed working with Jarvis) to choose a nearby explored free area.
 Inspect the generated plan and costmaps. A NavigateToPose request also attempts
 to follow the plan, but disarming prevents any motor movement; expect the goal
 to fail its progress check when the robot does not move. This is a *planning
@@ -55,9 +55,10 @@ publication and the independent drive watchdog stops the motors if needed.
 - The 0.20m minimum turning radius is a starting assumption based on a
   0.09366m wheelbase and nominal 30 degree steering cap. Real turning response
   remains to be measured.
-- Smac Hybrid uses a forward-only Dubins motion model; controller disables
-  spin-in-place and reversing. The behavior tree contains plan+follow only,
-  with no spin or reverse recovery.
+- Smac Hybrid uses Reeds-Shepp forward/reverse planning (reverse penalty 2.0),
+  with Regulated Pure Pursuit `allow_reversing: true` and `use_rotate_to_heading: false`.
+  The behavior tree contains plan+follow only, with no automatic spin/backup
+  recovery behavior.
 - The 0.30m XY goal tolerance is deliberately forgiving. Final heading is not
   enforced strictly for the initial experiment.
 - Lower and upper LiDAR feed both costmaps. Confirm costmaps visibly mark
@@ -78,3 +79,24 @@ publication and the independent drive watchdog stops the motors if needed.
 The setup uses the Jazzy Nav2 controller, planner, and BT navigator nodes.
 It intentionally does not run the stock `nav2_bringup/navigation_launch.py`,
 which remaps controller output to `cmd_vel_nav` for smoothing.
+
+## Reverse navigation validation (after enabling Reeds-Shepp)
+
+The existing `ros_drive_controller.py` maps negative `/cmd_vel.linear.x` to
+`PiCarHardware.drive("backward", power)` and computes steering from `omega / v`.
+That is compatible with reverse Ackermann motion, but the sign, speed, stopping
+behavior, and reverse obstacle coverage need real-hardware validation.
+
+1. Keep the motors disarmed. `git pull --ff-only`, restart
+   `jarvis-nav2.service`, and confirm planner/controller/BT lifecycle ACTIVE.
+2. Inspect a Reeds-Shepp route with RViz **2D Goal Pose**. For a pure backing
+   test, choose a free-space goal behind Jarvis with a similar heading; monitor
+   `/cmd_vel` for negative `linear.x` while disarmed.
+3. Only if the rear is clear in the *costmap* and physically, arm for a short,
+   supervised reverse drive with immediate access to motor disarm/power cutoff.
+   The lower LiDAR has forward-limited coverage; rear detection relies mainly
+   on the upper LiDAR. Do not assume the 0.23 m circular robot footprint covers
+   protrusions or that velocity scaling perfectly matches physical speed.
+4. For rollback: revert the two options to `DUBIN` and `allow_reversing: false`,
+   remove the optional `reverse_penalty`, then restart `jarvis-nav2.service`.
+
