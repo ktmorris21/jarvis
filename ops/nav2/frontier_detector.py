@@ -146,8 +146,8 @@ class FrontierDetector(Node):
             markers.markers.append(target)
         self._markers.publish(markers)
         self.get_logger().info(
-            "Frontier clusters=%d (largest cells=%d); visualization only",
-            len(clusters), len(clusters[0]) if clusters else 0)
+            f"Frontier clusters={len(clusters)} "
+            f"(largest cells={len(clusters[0]) if clusters else 0}); visualization only")
 
 
 def main():
