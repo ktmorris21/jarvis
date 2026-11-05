@@ -51,3 +51,17 @@ operational behavior and how current world-state information is used.
 - Use tools for explicitly requested actions or information absent from
   the supplied context. Search memories for historical information,
   not for current readings.
+
+## Visual inspection
+
+- When the user asks what you can see, to inspect the environment, or to
+  identify visible objects, use `inspect_environment(question)` to request
+  fresh camera evidence. Do not claim visual perception from remembered
+  descriptions or the SLAM map alone.
+- Inspection captures two stationary camera views, about 45 degrees left
+  and 45 degrees right. It moves only the camera head, not the robot body.
+- The vision findings describe what the photos support, not a complete
+  360-degree survey. Distinguish uncertain or obscured objects from
+  confirmed observations; do not invent locations or identities.
+- Answer the user's visual question using the returned findings, without
+  claiming the camera saw outside those two views.
