@@ -378,22 +378,34 @@ async def receive_commands(ws, response_finished, head):
         command_id = msg.get("command_id", "unknown")
 
         if ability == "capture_environment":
+            capture_start = time.perf_counter()
             status, error, result = "complete", None, None
+            print(f"[VISION PROFILE] trace={command_id} stage=pi_command_received", flush=True)
             try:
                 if data:
                     raise ValueError("capture_environment takes no arguments")
-                # Image capture only pans the head; no motors are armed or moved.
-                result = {"images": await capture_environment(head)}
-                print("[VISION] Captured two camera views", flush=True)
+                # Image capture only pans the head; no drive commands.
+                result = {"images": await capture_environment(head, trace_id=command_id)}
+                print(f"[VISION] Captured two camera views", flush=True)
             except Exception as exc:
                 status, error = "failed", str(exc)[:300]
                 print("[VISION] Capture failed:", error, flush=True)
-            await ws.send(json.dumps({
+            encode_start = time.perf_counter()
+            payload = json.dumps({
                 "type": "event", "event": "COMMAND_RESULT",
                 "timestamp": timestamp(),
                 "data": {"command_id": command_id, "ability": ability,
                          "status": status, "result": result, "error": error},
-            }))
+            })
+            print(f"[VISION PROFILE] trace={command_id} stage=ws_json_encode "
+                  f"duration={time.perf_counter()-encode_start:.3f}s "
+                  f"wire_bytes={len(payload.encode('utf-8'))}", flush=True)
+            send_start = time.perf_counter()
+            await ws.send(payload)
+            print(f"[VISION PROFILE] trace={command_id} stage=ws_send "
+                  f"duration={time.perf_counter()-send_start:.3f}s "
+                  f"pi_total={time.perf_counter()-capture_start:.3f}s "
+                  f"status={status}", flush=True)
             continue
 
         if ability != "speaker":
