@@ -2,7 +2,7 @@
 
 **Flow:** Spoken request -> Core Agent SDK `inspect_environment(question)`
 -> authenticated Core command bus -> `picar-voice` WebSocket
-`capture_environment` -> camera pan -45/+45 degrees -> two JPEGs
+`capture_environment` -> camera pan -25/+25 degrees -> two JPEGs
 -> transient command response -> Core Responses API vision model
 -> textual findings returned to the Agent -> spoken answer.
 
@@ -14,7 +14,7 @@ V4L2 fallback. Do not instantiate `Picarx` to control the head.
 
 ### Behavior
 
-- Two views: left (-45°) and right (+45°), ~0.65s settling each.
+- Two views: left (-25°) and right (+25°), ~0.65s settling each.
 - Returns head to neutral even after a capture error.
 - Does not turn, navigate, or arm/disarm the chassis.
 - Image binaries are not retained by Core's event/memory storage.
@@ -43,7 +43,7 @@ subprocess restarts with the voice service.
 
 ### Test
 
-With Jarvis stationary and the camera mechanically free to sweep ±45°:
+With Jarvis stationary and the camera mechanically free to sweep ±25°:
 "Hey Jarvis, inspect your environment and tell me what you see."
 
 Check logs:
