@@ -36,6 +36,7 @@ AGENT_TOOL_NAMES = frozenset({
     "explore",
     "stop_exploring",
     "exploration_status",
+    "inspect_environment",
     "set_identity_profile",
     "get_identity_profile",
 })
@@ -162,6 +163,38 @@ async def exploration_command_data(ability: str) -> dict:
         _pending_status.pop(command.command_id, None)
 
 
+async def inspect_environment_data(question: str) -> dict:
+    """Capture fresh two-view images through the Pi voice interface and interpret.
+
+    The JPEG payload exists only in the Core command future during inference.
+    No image is added to the SDK conversation or permanent Jarvis memory.
+    """
+    from .executive import send_command
+    from .models import Command
+
+    command = Command(target="picar-voice", ability="capture_environment")
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    _pending_status[command.command_id] = future
+    try:
+        sent, route = await send_command(command)
+        if not sent:
+            return {"available": False, "reason": route}
+        try:
+            event = await asyncio.wait_for(future, timeout=70)
+        except asyncio.TimeoutError:
+            return {"available": False, "reason": "Camera capture timed out"}
+        result = event.get("result") or {}
+        if event.get("status") != "complete" or not isinstance(result.get("images"), list):
+            return {"available": False, "reason": event.get("error") or "Camera capture failed"}
+        # Core validates JPEG encodings, sizes, and views before interpretation.
+        return await execute_tool(
+            "inspect_environment", {"question": question, "_capture_images": result["images"]}
+        )
+    finally:
+        _pending_status.pop(command.command_id, None)
+
+
 def search_memory_data(query: str) -> list[dict]:
     results = memory.retrieve(query[:500], limit=5)
     return [{"id": m["id"], "type": m["memory_type"], "content": m["content"],
@@ -246,7 +279,14 @@ async def agent_reply(text: str) -> str:
             tool_started = time.perf_counter()
             try:
                 arguments = json.loads(raw_arguments or "{}")
-                result = await execute_tool(name, arguments)
+                if name == "inspect_environment":
+                    question = arguments.get("question")
+                    if (set(arguments) != {"question"} or not isinstance(question, str)
+                            or not 1 <= len(question.strip()) <= 500):
+                        raise ValueError("inspect_environment requires a question of 1-500 characters")
+                    result = await inspect_environment_data(question)
+                else:
+                    result = await execute_tool(name, arguments)
                 return json.dumps(result, default=str)
             except Exception as exc:
                 log.warning("Core tool %s failed: %s", name, type(exc).__name__)
