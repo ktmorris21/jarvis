@@ -21,6 +21,7 @@ import websockets
 from openwakeword.model import Model
 from local_commands import LocalCommands
 from local_audio import play_local_response
+from environment_camera import capture_environment
 from boot_notice import BOOT_GREETING, needs_boot_announcement, mark_boot_announced
 
 
@@ -376,8 +377,27 @@ async def receive_commands(ws, response_finished, head):
         data = msg.get("data") or {}
         command_id = msg.get("command_id", "unknown")
 
+        if ability == "capture_environment":
+            status, error, result = "complete", None, None
+            try:
+                if data:
+                    raise ValueError("capture_environment takes no arguments")
+                # Image capture only pans the head; no motors are armed or moved.
+                result = {"images": await capture_environment(head)}
+                print("[VISION] Captured two camera views", flush=True)
+            except Exception as exc:
+                status, error = "failed", str(exc)[:300]
+                print("[VISION] Capture failed:", error, flush=True)
+            await ws.send(json.dumps({
+                "type": "event", "event": "COMMAND_RESULT",
+                "timestamp": timestamp(),
+                "data": {"command_id": command_id, "ability": ability,
+                         "status": status, "result": result, "error": error},
+            }))
+            continue
+
         if ability != "speaker":
-            print(f"Ignoring unsupported command: {ability}")
+            print(f"Ignoring unsupported command: {ability}", flush=True)
             continue
 
         print(
@@ -465,7 +485,7 @@ async def core_socket_worker(args, head, response_finished, connection_state):
                 await ws.send(json.dumps({
                     "type": "hello", "interface_id": INTERFACE_ID,
                     "interface_type": "mobile_body",
-                    "capabilities": ["speaker", "audio_input", "audio_output"],
+                    "capabilities": ["speaker", "audio_input", "audio_output", "capture_environment"],
                 }))
                 hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
                 if hello.get("type") != "hello_ack":
