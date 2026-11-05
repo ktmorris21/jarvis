@@ -162,3 +162,59 @@ def test_session_reset_targets_only_prior_agent_conversation(monkeypatch):
         agent_runtime.PREVIOUS_SESSION_ID
     )
     assert agent_runtime.SESSION_ID != agent_runtime.PREVIOUS_SESSION_ID
+
+
+def test_inspect_environment_uses_fresh_pi_images(monkeypatch):
+    from jarvis_core import executive, agent_runtime
+    from jarvis_core.agent_runtime import _pending_status
+
+    photos = [
+        {"view": "left", "jpeg_base64": "test-left"},
+        {"view": "right", "jpeg_base64": "test-right"},
+    ]
+
+    async def fake_send(command):
+        assert command.target == "picar-voice"
+        assert command.ability == "capture_environment"
+        asyncio.get_running_loop().call_soon(
+            deliver_status_result, {
+                "command_id": command.command_id, "status": "complete",
+                "result": {"images": photos},
+            })
+        return True, "picar-voice"
+
+    async def fake_vision(name, args):
+        assert name == "inspect_environment"
+        assert args == {"question": "What is in front of me?",
+                        "_capture_images": photos}
+        return {"available": True, "findings": "A hallway and doorway."}
+
+    monkeypatch.setattr(executive, "send_command", fake_send)
+    monkeypatch.setattr(agent_runtime, "execute_tool", fake_vision)
+    result = asyncio.run(agent_runtime.inspect_environment_data(
+        "What is in front of me?"))
+    assert result["available"] is True
+    assert result["findings"] == "A hallway and doorway."
+    assert not _pending_status
+
+
+def test_camera_result_does_not_persist_image_payload(monkeypatch):
+    from jarvis_core import executive
+    from jarvis_core.models import InterfaceEvent
+    records = []
+    delivered = []
+    monkeypatch.setattr(executive.repository, "complete_action_by_command",
+                        lambda command_id, result: records.append(result))
+    from jarvis_core import agent_runtime
+    monkeypatch.setattr(agent_runtime, "deliver_status_result",
+                        lambda event: delivered.append(event))
+    image = "very-sensitive-jpeg-base64"
+    event = InterfaceEvent(event="COMMAND_RESULT", data={
+        "command_id": "camera-test", "ability": "capture_environment",
+        "status": "complete",
+        "result": {"images": [{"view": "left", "jpeg_base64": image}]},
+    })
+    outcome = asyncio.run(executive.handle_event(event, source="picar-voice"))
+    assert outcome["persisted"] is False
+    assert delivered[0]["result"]["images"][0]["jpeg_base64"] == image
+    assert image not in str(records)
