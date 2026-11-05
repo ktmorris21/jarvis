@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 from .config import settings
@@ -57,15 +58,11 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
             "reason": "Current ROS status unavailable",
         },
     }
-    guidance = (
-        "World state: use the timestamped robot_status snapshot for current "
-        "robot-health questions. It takes precedence over old conversation and "
-        "memories. If a requested reading is missing or unavailable, say so "
-        "without guessing. This snapshot does not authorize navigation safety decisions. "
-        "Only switch identity profiles upon explicit user request; the new identity takes effect next turn. "
-        "Use tools only for explicitly requested actions or information absent "
-        "from the supplied context; search memories for historical information."
-    )
+    guidance = Path(__file__).with_name("operational_instructions.md").read_text(
+        encoding="utf-8"
+    ).strip()
+    if not guidance:
+        raise ValueError("Core operational instructions are empty")
     return (
         identity_instructions()
         + "\\n\\n"
