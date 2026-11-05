@@ -45,3 +45,26 @@ def test_desktop_turns_enter_canonical_conversation_stream(monkeypatch):
     assert all(item["session_id"] == "jarvis-primary" for item in saved)
     assert saved[0]["text"] == "What about height?"
     assert saved[1]["text"] == "Yes, about dogs."
+
+
+def test_camera_rejects_three_view_legacy_payload():
+    import pytest
+    from fastapi import HTTPException
+
+    photos = [{"view": name, "jpeg_base64": "unused"}
+              for name in ("left", "center", "right")]
+    with pytest.raises(HTTPException, match="two freshly captured"):
+        asyncio.run(execute_tool("inspect_environment", {
+            "question": "What is in front of me?", "_capture_images": photos,
+        }))
+
+
+def test_camera_requires_one_left_and_one_right():
+    import pytest
+    from fastapi import HTTPException
+
+    photos = [{"view": "left", "jpeg_base64": "unused"}] * 2
+    with pytest.raises(HTTPException):
+        asyncio.run(execute_tool("inspect_environment", {
+            "question": "Describe surroundings", "_capture_images": photos,
+        }))

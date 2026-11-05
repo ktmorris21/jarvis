@@ -285,7 +285,7 @@ async def speak_turn(ws, head, confirmation_prompt=False):
             try:
                 arguments = json.loads(call.get("arguments") or "{}")
                 if call["name"] == "inspect_environment":
-                    print("[REALTIME] Capturing three camera views...", flush=True)
+                    print("[REALTIME] Capturing two camera views at ±45 degrees...", flush=True)
                     arguments["_capture_images"] = await capture_environment(head)
                 if call["name"] == "reboot_pi":
                     raise PermissionError("Reboot cannot be initiated from Realtime voice")
