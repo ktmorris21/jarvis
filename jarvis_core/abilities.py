@@ -175,7 +175,7 @@ async def execute_tool(name: str, args: dict):
             raise HTTPException(503, "Vision model not configured")
         content = [{"type": "input_text", "text":
                     "You are Jarvis's visual perception subsystem. Analyze only these fresh camera "
-                    "images taken at camera pan -45 degrees (left) and +45 degrees (right). Describe evidence accurately, explicitly note ambiguity and unreadable "
+                    "images taken at camera pan -25 degrees (left) and +25 degrees (right). Describe evidence accurately, explicitly note ambiguity and unreadable "
                     "text, and do not invent objects. Answer the question: " + question}]
         for view, encoded in views:
             content.append({"type": "input_text", "text": "Camera view: " + view})
