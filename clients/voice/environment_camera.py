@@ -1,4 +1,4 @@
-"""Capture a small, stationary three-view JPEG survey from the Pi camera.
+"""Capture a small, stationary two-view JPEG survey from the Pi camera.
 
 Camera pan is owned by the existing head-expressions process. Never
 instantiate Picarx (doing so can reset the steering calibration).
@@ -18,8 +18,7 @@ async def capture_environment(head):
     isolated_cam = Path(os.getenv("JARVIS_LIBCAMERA_SOURCE", "/home/shadowfax/src/libcamera-0.3")) / "build/src/apps/cam/cam"
     images = []
     try:
-        for label, state in (("left", "scan_left"), ("center", "scan_center"),
-                             ("right", "scan_right")):
+        for label, state in (("left", "scan_left"), ("right", "scan_right")):
             if head.proc is None or head.proc.returncode is not None:
                 raise RuntimeError("Camera head controller unavailable")
             await head.set(state)
