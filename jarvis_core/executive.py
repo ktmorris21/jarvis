@@ -39,6 +39,17 @@ async def send_command(command:Command):
     return False,f"No connected interface advertises '{command.ability}'."
 
 async def handle_event(event:InterfaceEvent,source="unknown"):
+    # Camera captures are transient binary tool results. Deliver directly to
+    # the waiting Agents SDK call, never record JPEG base64 in DB/events/memory.
+    if (source == "picar-voice" and event.event == "COMMAND_RESULT"
+            and event.data.get("ability") == "capture_environment"):
+        from .agent_runtime import deliver_status_result
+        deliver_status_result(event.data)
+        safe = {key: value for key, value in event.data.items() if key != "result"}
+        safe["result"] = {"image_count": len(
+            (event.data.get("result") or {}).get("images", []))}
+        repository.complete_action_by_command(event.data.get("command_id"), safe)
+        return {"persisted": False, "transient_camera_capture": True}
     decision=attention.evaluate(event.event,event.data)
     state.last_attention={"event":event.event,"score":decision.score,"disposition":decision.disposition.value,"reasons":decision.reasons,"matched_goals":decision.matched_goals}
 
