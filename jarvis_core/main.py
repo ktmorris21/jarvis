@@ -26,7 +26,9 @@ async def get_state(): return await state.snapshot()
 
 @app.get("/context")
 async def get_context():
+    from .identity import current_identity_profile
     return {
+        "active_identity_profile": current_identity_profile(),
         "engine": "openai-agents-sdk",
         "session": "jarvis-primary",
         "history": "managed by the Agents SDK persistent SQLAlchemy session",

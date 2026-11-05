@@ -4,6 +4,18 @@ from fastapi import HTTPException
 from .config import settings
 
 CORE_TOOLS = {
+    "set_identity_profile": {
+        "type": "function", "name": "set_identity_profile",
+        "description": "Switch my active identity/personality to Alpha, Bravo, or Charlie when explicitly requested by the user. Takes effect on the next model turn; preserves memories and robot capabilities.",
+        "parameters": {"type": "object", "properties": {
+            "profile": {"type": "string", "enum": ["alpha", "bravo", "charlie"]},
+        }, "required": ["profile"], "additionalProperties": False},
+    },
+    "get_identity_profile": {
+        "type": "function", "name": "get_identity_profile",
+        "description": "Read which of my three identity profiles (Alpha, Bravo, Charlie) is currently active.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
     "get_audio_levels": {
         "type": "function", "name": "get_audio_levels",
         "description": "Read Jarvis Pi speaker output and microphone capture gain settings, in percent.",
@@ -88,6 +100,18 @@ async def execute_tool(name: str, args: dict):
         raise HTTPException(404, "Unknown or disallowed tool")
     if not isinstance(args, dict):
         raise HTTPException(400, "Tool arguments must be an object")
+    if name in {"set_identity_profile", "get_identity_profile"}:
+        from .identity import current_identity_profile, select_identity_profile
+        if name == "get_identity_profile":
+            if args:
+                raise HTTPException(400, "get_identity_profile takes no arguments")
+            return {"active_profile": current_identity_profile()}
+        if set(args) != {"profile"} or not isinstance(args["profile"], str) or args["profile"] not in {"alpha", "bravo", "charlie"}:
+            raise HTTPException(400, "profile must be alpha, bravo, or charlie")
+        try:
+            return select_identity_profile(args["profile"])
+        except (OSError, ValueError):
+            return {"success": False, "reason": "Profile file is unavailable or invalid; previous identity retained"}
     from .agent_runtime import get_robot_status_data, search_memory_data
     if name in {"get_audio_levels", "set_audio_level", "get_lidar_service",
                 "set_lidar_service", "reboot_pi"}:
