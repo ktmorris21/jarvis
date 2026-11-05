@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .config import settings
 from .abilities import tool_schemas, execute_tool
-from .identity import identity_instructions
+from .identity import identity_instructions, current_identity_profile
 from .memory import memory
 from .persistence.repository import repository
 from .state import state
@@ -32,6 +32,8 @@ AGENT_TOOL_NAMES = frozenset({
     "explore",
     "stop_exploring",
     "exploration_status",
+    "set_identity_profile",
+    "get_identity_profile",
 })
 
 
@@ -49,6 +51,7 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
             {"kind": g.get("kind"), "description": g.get("description")}
             for g in goals
         ],
+        "active_identity_profile": current_identity_profile(),
         "robot_status": robot_status_context or {
             "available": False,
             "reason": "Current ROS status unavailable",
@@ -59,6 +62,7 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
         "robot-health questions. It takes precedence over old conversation and "
         "memories. If a requested reading is missing or unavailable, say so "
         "without guessing. This snapshot does not authorize navigation safety decisions. "
+        "Only switch identity profiles upon explicit user request; the new identity takes effect next turn. "
         "Use tools only for explicitly requested actions or information absent "
         "from the supplied context; search memories for historical information."
     )
@@ -249,17 +253,6 @@ async def agent_reply(text: str) -> str:
             log.warning("[VOICE PROFILE] status_prefetch=%.3fs available=%s",
                         time.perf_counter() - prefetch_start, robot_status_context is not None)
     log.warning("[VOICE PROFILE] status_snapshot_keys=%s", list((robot_status_context or {}).get("status", {}).keys()))
-    agent = Agent(
-        name="Jarvis",
-        model=settings.agent_model,
-        instructions=baseline_context(robot_status_context=robot_status_context),
-        tools=[make_tool(spec) for spec in tool_schemas()
-               if spec["name"] in AGENT_TOOL_NAMES],
-        model_settings=ModelSettings(
-            parallel_tool_calls=False,
-            reasoning=Reasoning(effort=settings.agent_reasoning_effort),
-        ),
-    )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
     hooks = ModelTimingHooks()
@@ -267,6 +260,17 @@ async def agent_reply(text: str) -> str:
     async with _turn_lock:
         run_started = time.perf_counter()
         log.warning("[VOICE PROFILE] agent_queue=%.3fs", run_started - queued_at)
+        agent = Agent(
+            name="Jarvis",
+            model=settings.agent_model,
+            instructions=baseline_context(robot_status_context=robot_status_context),
+            tools=[make_tool(spec) for spec in tool_schemas()
+                   if spec["name"] in AGENT_TOOL_NAMES],
+            model_settings=ModelSettings(
+                parallel_tool_calls=False,
+                reasoning=Reasoning(effort=settings.agent_reasoning_effort),
+            ),
+        )
         try:
             result = await asyncio.wait_for(
                 Runner.run(agent, text, session=_session_instance(), hooks=hooks,
