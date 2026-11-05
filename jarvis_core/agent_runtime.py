@@ -253,6 +253,24 @@ async def agent_reply(text: str) -> str:
             log.warning("[VOICE PROFILE] status_prefetch=%.3fs available=%s",
                         time.perf_counter() - prefetch_start, robot_status_context is not None)
     log.warning("[VOICE PROFILE] status_snapshot_keys=%s", list((robot_status_context or {}).get("status", {}).keys()))
+    if robot_status_context:
+        readings = robot_status_context["status"]
+        log.warning(
+            "[ROBOT STATUS] lidar_active=%s scan_age=%s "
+            "mapping_available=%s map_recent=%s map_age=%s "
+            "pose_available=%s battery_available=%s battery_error=%s "
+            "exploration_available=%s exploration_mode=%s",
+            readings.get("lidar", {}).get("active"),
+            readings.get("lidar", {}).get("last_scan_age_seconds"),
+            readings.get("mapping", {}).get("available"),
+            readings.get("mapping", {}).get("recent_update"),
+            readings.get("mapping", {}).get("last_map_age_seconds"),
+            readings.get("pose", {}).get("available"),
+            readings.get("battery", {}).get("available"),
+            readings.get("battery", {}).get("error"),
+            readings.get("exploration", {}).get("available"),
+            readings.get("exploration", {}).get("mode"),
+        )
     # All interfaces share one continuing conversation; serialize runs to avoid
     # racing updates to the session or concurrent Core reasoning.
     hooks = ModelTimingHooks()
