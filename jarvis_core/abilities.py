@@ -1,7 +1,11 @@
 """Core-owned, shared tool schemas and execution for text and voice models."""
 import asyncio
+import logging
+import time
 from fastapi import HTTPException
 from .config import settings
+
+log = logging.getLogger(__name__)
 
 CORE_TOOLS = {
     "set_identity_profile": {
@@ -139,6 +143,8 @@ async def execute_tool(name: str, args: dict):
                 "Fresh camera capture is unavailable from this interface; "
                 "Pi remote camera transport is not yet configured."}
     if name == "inspect_environment":
+        vision_started = time.perf_counter()
+        trace = str(args.get("_trace_id", "untraced"))[:64]
         question = args.get("question")
         photos = args.get("_capture_images")
         if not isinstance(question, str) or not 1 <= len(question.strip()) <= 500:
@@ -163,6 +169,8 @@ async def execute_tool(name: str, args: dict):
             views.append((entry["view"], encoded))
         if len({name for name, _ in views}) != 2:
             raise HTTPException(400, "Expected distinct left and right views")
+        log.warning("[VISION PROFILE] trace=%s stage=validate_images duration=%.3fs views=%d",
+                    trace, time.perf_counter()-vision_started, len(views))
         if not settings.openai_api_key:
             raise HTTPException(503, "Vision model not configured")
         content = [{"type": "input_text", "text":
@@ -173,6 +181,9 @@ async def execute_tool(name: str, args: dict):
             content.append({"type": "input_text", "text": "Camera view: " + view})
             content.append({"type": "input_image", "image_url": "data:image/jpeg;base64," + encoded,
                             "detail": "high"})
+        api_start = time.perf_counter()
+        log.warning("[VISION PROFILE] trace=%s stage=vision_api_start model=%s views=%d",
+                    trace, settings.vision_model, len(views))
         try:
             async with httpx.AsyncClient(timeout=75) as client:
                 response = await client.post(
@@ -183,6 +194,9 @@ async def execute_tool(name: str, args: dict):
                           "max_output_tokens": 500},
                 )
                 response.raise_for_status()
+                api_elapsed = time.perf_counter()-api_start
+                log.warning("[VISION PROFILE] trace=%s stage=vision_api_response duration=%.3fs "
+                            "response_bytes=%d", trace, api_elapsed, len(response.content))
                 answer = response.json()
             findings = answer.get("output_text") or " ".join(
                 item.get("text", "")
@@ -192,8 +206,13 @@ async def execute_tool(name: str, args: dict):
             ).strip()
             if not findings:
                 raise ValueError("Vision model returned no text")
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("[VISION PROFILE] trace=%s stage=vision_api_error duration=%.3fs "
+                        "error=%s", trace, time.perf_counter()-api_start, type(exc).__name__)
             raise HTTPException(502, "Vision analysis failed")
+        log.warning("[VISION PROFILE] trace=%s stage=vision_complete total=%.3fs "
+                    "findings_chars=%d", trace, time.perf_counter()-vision_started,
+                    len(findings))
         return {"available": True, "question": question,
                 "views": [name for name, _ in views], "findings": findings}
     if name == "turtle_status":
