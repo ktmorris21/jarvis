@@ -173,25 +173,47 @@ async def inspect_environment_data(question: str) -> dict:
     from .models import Command
 
     command = Command(target="picar-voice", ability="capture_environment")
+    trace = command.command_id
+    started = time.perf_counter()
+    log.warning("[VISION PROFILE] trace=%s stage=core_capture_start", trace)
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     _pending_status[command.command_id] = future
     try:
+        send_start = time.perf_counter()
         sent, route = await send_command(command)
+        log.warning("[VISION PROFILE] trace=%s stage=core_command_dispatch duration=%.3fs sent=%s",
+                    trace, time.perf_counter()-send_start, sent)
         if not sent:
             return {"available": False, "reason": route}
         try:
             event = await asyncio.wait_for(future, timeout=70)
         except asyncio.TimeoutError:
             return {"available": False, "reason": "Camera capture timed out"}
+        log.warning("[VISION PROFILE] trace=%s stage=capture_roundtrip duration=%.3fs status=%s",
+                    trace, time.perf_counter()-started, event.get("status"))
         result = event.get("result") or {}
         if event.get("status") != "complete" or not isinstance(result.get("images"), list):
             return {"available": False, "reason": event.get("error") or "Camera capture failed"}
         # Core validates JPEG encodings, sizes, and views before interpretation.
-        return await execute_tool(
-            "inspect_environment", {"question": question, "_capture_images": result["images"]}
-        )
+        images = result["images"]
+        log.warning("[VISION PROFILE] trace=%s stage=images_received views=%d image_chars=%d",
+                    trace, len(images), sum(len(i.get("jpeg_base64", "")) for i in images
+                                             if isinstance(i, dict)))
+        vision_started = time.perf_counter()
+        try:
+            return await execute_tool(
+                "inspect_environment",
+                {"question": question, "_capture_images": images,
+                 "_trace_id": trace}
+            )
+        finally:
+            log.warning("[VISION PROFILE] trace=%s stage=vision_processing duration=%.3fs "
+                        "total_tool=%.3fs", trace, time.perf_counter()-vision_started,
+                        time.perf_counter()-started)
     finally:
+        log.warning("[VISION PROFILE] trace=%s stage=capture_request_end total=%.3fs",
+                    trace, time.perf_counter()-started)
         _pending_status.pop(command.command_id, None)
 
 
