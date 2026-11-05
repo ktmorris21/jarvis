@@ -123,3 +123,42 @@ def test_operational_status_guidance_is_shared_across_identities(monkeypatch):
     assert "general status or systems-health request" in text
     assert "Navigation/exploration status is not a substitute for systems status" in text
     assert '"mode": "exploring"' in text
+
+
+def test_session_reset_targets_only_prior_agent_conversation(monkeypatch):
+    from jarvis_core import agent_runtime
+    from jarvis_core.agent_runtime import repository
+    import sys
+    import types
+
+    cleared = []
+    records = {}
+
+    class FakeSession:
+        @classmethod
+        def from_url(cls, session_id, **kwargs):
+            assert session_id == agent_runtime.PREVIOUS_SESSION_ID
+            assert kwargs["create_tables"] is True
+            return cls()
+
+        async def clear_session(self):
+            cleared.append(True)
+
+    monkeypatch.setitem(
+        sys.modules, "agents.extensions.memory",
+        types.SimpleNamespace(SQLAlchemySession=FakeSession),
+    )
+    monkeypatch.setattr(agent_runtime, "_agent_session_url",
+                        lambda: "sqlite+aiosqlite:///test.db")
+    monkeypatch.setattr(repository, "get_state",
+                        lambda key: records.get(key))
+    monkeypatch.setattr(repository, "upsert_state",
+                        lambda key, kind, value: records.__setitem__(key, value))
+
+    asyncio.run(agent_runtime._clear_previous_agent_history_once())
+    asyncio.run(agent_runtime._clear_previous_agent_history_once())
+    assert len(cleared) == 1
+    assert records[agent_runtime.SESSION_RESET_MARKER]["cleared_session_id"] == (
+        agent_runtime.PREVIOUS_SESSION_ID
+    )
+    assert agent_runtime.SESSION_ID != agent_runtime.PREVIOUS_SESSION_ID
