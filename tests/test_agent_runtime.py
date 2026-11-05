@@ -185,8 +185,10 @@ def test_inspect_environment_uses_fresh_pi_images(monkeypatch):
 
     async def fake_vision(name, args):
         assert name == "inspect_environment"
-        assert args == {"question": "What is in front of me?",
-                        "_capture_images": photos}
+        assert args["question"] == "What is in front of me?"
+        assert args["_capture_images"] == photos
+        assert isinstance(args["_trace_id"], str)
+        assert len(args["_trace_id"]) >= 8
         return {"available": True, "findings": "A hallway and doorway."}
 
     monkeypatch.setattr(executive, "send_command", fake_send)
