@@ -60,3 +60,40 @@ invokes it.
 If a model request times out, check camera capture duration and the
 configured Agent turn timeout. Vision analysis includes two photographs
 sent as one model request and may take longer than standard voice replies.
+
+### Timing instrumentation (two photos)
+
+Each inspection generates a Core `command_id` printed as `trace=<id>`
+in both the Pi and Railway logs. Each duration uses a local monotonic
+clock; do not subtract raw Pi and Railway timestamps to measure transfer
+latency because their wall clocks may differ.
+
+On the Pi, look for `[VISION PROFILE]` entries for:
+`setup` (camera backend), `pan_settle` for each view,
+`camera_capture` for each view, `base64` for each view,
+`head_reset`, `ws_json_encode`, and `ws_send`.
+
+On Railway, `[VISION PROFILE]` includes:
+`core_capture_start`, `core_command_dispatch`,
+`capture_roundtrip` (Pi capture + transmission + Core receipt),
+`images_received`, `validate_images`, `vision_api_start`,
+`vision_api_response`, `vision_complete`,
+`vision_processing`, and `capture_request_end`.
+Preexisting `[VOICE PROFILE]` log entries cover LLM round trips,
+`tool=inspect_environment`, full Agent duration, TTS, and speaker dispatch.
+
+These measurements identify the main bottleneck without writing images
+or user-visible image interpretations to the logs. Image sizes and output
+text length are logged, but not contents.
+
+Pi:
+
+```bash
+journalctl -u jarvis-agents-voice.service -f -o cat \
+  | grep --line-buffered -E 'VISION PROFILE|VISION|VOICE PROFILE'
+```
+
+Railway logs: filter for `VISION PROFILE` and `VOICE PROFILE`.
+Correlate the Pi/Core camera trace by `trace`, then compare LLM/TTS
+stages from the same voice turn. Avoid changing camera backend or reducing
+settle time until we have a baseline.
