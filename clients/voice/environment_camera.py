@@ -29,9 +29,9 @@ async def capture_environment(head, trace_id=None):
                 raise RuntimeError("Camera head controller unavailable")
             move_start = time.perf_counter()
             await head.set(state)
-            await asyncio.sleep(0.65)
+            await asyncio.sleep(0.65)  # allow servo and camera to settle
             print(f"[VISION PROFILE] trace={trace} view={label} stage=pan_settle "
-                  f"duration={time.perf_counter()-move_start:.3f}s", flush=True)  # allow servo and camera to settle
+                  f"duration={time.perf_counter()-move_start:.3f}s", flush=True)
             if isolated_cam.is_file():
                 command = ["/usr/bin/python3", str(isolated)]
             elif camera:
