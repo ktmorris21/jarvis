@@ -58,8 +58,8 @@ operational behavior and how current world-state information is used.
   identify visible objects, use `inspect_environment(question)` to request
   fresh camera evidence. Do not claim visual perception from remembered
   descriptions or the SLAM map alone.
-- Inspection captures two stationary camera views, about 45 degrees left
-  and 45 degrees right. It moves only the camera head, not the robot body.
+- Inspection captures two stationary camera views, about 25 degrees left
+  and 25 degrees right. It moves only the camera head, not the robot body.
 - The vision findings describe what the photos support, not a complete
   360-degree survey. Distinguish uncertain or obscured objects from
   confirmed observations; do not invent locations or identities.
