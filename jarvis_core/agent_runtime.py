@@ -19,8 +19,11 @@ log = logging.getLogger(__name__)
 _turn_lock = asyncio.Lock()
 _pending_status: dict[str, asyncio.Future] = {}
 _session = None
-# Session ID was rotated to reset conversational history; long-term memory is preserved.
-SESSION_ID = "jarvis-primary-after-20261031-reset"
+# Fresh SDK session; the old session is explicitly cleared once below.
+# Jarvis's long-term memories and operational state are separate from this session.
+PREVIOUS_SESSION_ID = "jarvis-primary-after-20261031-reset"
+SESSION_ID = "jarvis-primary-after-20261105-status-reset"
+SESSION_RESET_MARKER = "jarvis:agent_sdk_history_cleared_20261105"
 
 
 # Only deliberate actions and targeted retrieval belong in the model's tool list.
@@ -165,23 +168,51 @@ def search_memory_data(query: str) -> list[dict]:
              "created_at": m.get("created_at")} for m in results]
 
 
+def _agent_session_url() -> str:
+    url = settings.database_url
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    if url.startswith("sqlite:///"):
+        return "sqlite+aiosqlite:///" + url[len("sqlite:///"):]
+    if url.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite://")):
+        return url
+    raise ValueError("Agent session requires PostgreSQL or SQLite database")
+
+
 def _session_instance():
     global _session
     if _session is None:
         from agents.extensions.memory import SQLAlchemySession
-
-        url = settings.database_url
-        if url.startswith("postgresql://"):
-            url = "postgresql+asyncpg://" + url[len("postgresql://"):]
-        elif url.startswith("postgres://"):
-            url = "postgresql+asyncpg://" + url[len("postgres://"):]
-        elif url.startswith("sqlite:///"):
-            url = "sqlite+aiosqlite:///" + url[len("sqlite:///"):]
-        elif not (url.startswith("postgresql+asyncpg://") or
-                  url.startswith("sqlite+aiosqlite://")):
-            raise ValueError("Agent session requires PostgreSQL or SQLite database")
-        _session = SQLAlchemySession.from_url(SESSION_ID, url=url, create_tables=True)
+        _session = SQLAlchemySession.from_url(
+            SESSION_ID, url=_agent_session_url(), create_tables=True
+        )
     return _session
+
+
+async def _clear_previous_agent_history_once() -> None:
+    """One-time deletion of only the previous Agents SDK conversation.
+
+    Rotating the active session also prevents old messages entering the
+    model's input while this cleanup is being performed.
+    """
+    if repository.get_state(SESSION_RESET_MARKER):
+        return
+    from agents.extensions.memory import SQLAlchemySession
+    previous = SQLAlchemySession.from_url(
+        PREVIOUS_SESSION_ID, url=_agent_session_url(), create_tables=True
+    )
+    await previous.clear_session()
+    repository.upsert_state(
+        SESSION_RESET_MARKER,
+        "jarvis_setting",
+        {"cleared_session_id": PREVIOUS_SESSION_ID,
+         "replacement_session_id": SESSION_ID,
+         "cleared_at": datetime.now(timezone.utc).isoformat()},
+    )
+    log.warning("[AGENT SESSION] cleared previous Agents SDK conversation history; new session active")
+
 
 
 async def agent_reply(text: str) -> str:
@@ -273,6 +304,8 @@ async def agent_reply(text: str) -> str:
     hooks = ModelTimingHooks()
     queued_at = time.perf_counter()
     async with _turn_lock:
+        # Perform the one-time database cleanup before any new agent turn.
+        await _clear_previous_agent_history_once()
         run_started = time.perf_counter()
         log.warning("[VOICE PROFILE] agent_queue=%.3fs", run_started - queued_at)
         agent = Agent(
