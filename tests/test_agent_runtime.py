@@ -102,3 +102,24 @@ def test_exploration_tool_fails_closed_when_ros_unavailable(monkeypatch):
         }
         with pytest.raises(HTTPException):
             asyncio.run(execute_tool(name, {"unexpected": True}))
+
+
+def test_operational_status_guidance_is_shared_across_identities(monkeypatch):
+    from jarvis_core import agent_runtime
+    from jarvis_core.agent_runtime import repository
+
+    monkeypatch.setattr(repository, "goals", lambda *args: [])
+    monkeypatch.setattr(agent_runtime, "identity_instructions",
+                        lambda: "# Test identity")
+    monkeypatch.setattr(agent_runtime, "current_identity_profile",
+                        lambda: "bravo")
+    snapshot = {"available": True, "status": {
+        "lidar": {"active": True}, "mapping": {"available": True},
+        "pose": {"available": True}, "battery": {"available": True},
+        "exploration": {"available": True, "mode": "exploring"},
+    }}
+    text = baseline_context(robot_status_context=snapshot)
+    assert "# Test identity" in text
+    assert "general status or systems-health request" in text
+    assert "Navigation/exploration status is not a substitute for systems status" in text
+    assert '"mode": "exploring"' in text
