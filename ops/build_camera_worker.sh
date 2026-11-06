@@ -13,7 +13,7 @@ command -v meson >/dev/null
 # Use the very same meson development environment as the working
 # capture_libcamera.py implementation. Verify pkg-config resolves the
 # expected isolated libcamera, not the incompatible Ubuntu system copy.
-meson devenv -C "$SOURCE/build" -- /bin/bash -c '
+meson devenv -C "$SOURCE/build" /bin/bash -c '
 set -euo pipefail
 version="$(pkg-config --modversion libcamera)"
 echo "Resolved libcamera version: $version"
