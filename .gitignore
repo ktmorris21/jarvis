@@ -31,3 +31,6 @@ venv/
 *.pcm
 jarvis_maps/
 logs/
+
+# Pi-local compiled camera worker (built against the local isolated libcamera)
+/clients/voice/camera_native
