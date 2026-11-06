@@ -1,0 +1,25 @@
+[Unit]
+Description=Jarvis persistent low-rate OV5647 camera worker (isolated libcamera)
+After=local-fs.target
+Before=jarvis-agents-voice.service
+
+[Service]
+Type=simple
+User=shadowfax
+Group=shadowfax
+WorkingDirectory=/home/shadowfax/jarvis
+Environment=PYTHONUNBUFFERED=1
+Environment=JARVIS_CAMERA_INTERVAL_SECONDS=2
+Environment=JARVIS_LIBCAMERA_SOURCE=/home/shadowfax/src/libcamera-0.3
+Environment=JARVIS_CAMERA_WORKER_SOCKET=/run/jarvis-camera/camera.sock
+RuntimeDirectory=jarvis-camera
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 -u /home/shadowfax/jarvis/clients/voice/camera_worker.py
+Restart=on-failure
+RestartSec=4
+TimeoutStopSec=8
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
