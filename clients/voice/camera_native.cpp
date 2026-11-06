@@ -9,6 +9,8 @@
 #include <poll.h>
 #include <unistd.h>
 #include <cerrno>
+#include <algorithm>
+#include <cstdint>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
