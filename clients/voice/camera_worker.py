@@ -27,20 +27,32 @@ MAX_JPEG = 1_500_000
 
 
 def process_stats(pid):
-    """Lightweight process usage snapshot (native libcamera process)."""
+    """Aggregate native, meson, and helper-process resource usage."""
     try:
-        lines = Path(f"/proc/{pid}/status").read_text().splitlines()
-        status = {}
-        for line in lines:
-            if line.startswith(("VmRSS:", "VmHWM:", "Threads:")):
-                key, value = line.split(":", 1)
-                status[key] = value.strip()
-        with open(f"/proc/{pid}/stat", encoding="ascii") as stream:
-            stat = stream.read()
-        fields = stat[stat.rfind(")") + 2:].split()
+        processes = set()
+        pending = [pid]
+        while pending:
+            child = pending.pop()
+            if child in processes:
+                continue
+            processes.add(child)
+            children = Path(f"/proc/{child}/task/{child}/children")
+            if children.exists():
+                pending.extend(int(item) for item in children.read_text().split())
+        rss_kib, cpu, threads = 0, 0.0, 0
         clk = os.sysconf("SC_CLK_TCK")
-        status["cpu_seconds"] = round((int(fields[11]) + int(fields[12])) / clk, 2)
-        return status
+        for child in processes:
+            for line in Path(f"/proc/{child}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    rss_kib += int(line.split()[1])
+                elif line.startswith("Threads:"):
+                    threads += int(line.split()[1])
+            stat = Path(f"/proc/{child}/stat").read_text()
+            fields = stat[stat.rfind(")") + 2:].split()
+            cpu += (int(fields[11]) + int(fields[12])) / clk
+        return {"rss_mib": round(rss_kib / 1024, 1),
+                "cpu_seconds": round(cpu, 2), "threads": threads,
+                "processes": len(processes)}
     except (OSError, ValueError, IndexError):
         return {"available": False}
 
@@ -137,8 +149,8 @@ class CameraWorker:
                        if previous_cpu is not None and isinstance(cpu, float) else None)
             print(f"[CAMERA WORKER] resources native_pid={self.proc.pid} "
                   f"cpu_pct_1core={round(cpu_pct, 2) if cpu_pct is not None else 'warming'} "
-                  f"rss={stats.get('VmRSS')} peak={stats.get('VmHWM')} "
-                  f"threads={stats.get('Threads')} captures={self.captures}",
+                  f"rss_mib={stats.get('rss_mib')} processes={stats.get('processes')} "
+                  f"threads={stats.get('threads')} captures={self.captures}",
                   flush=True)
             previous_cpu, previous_at = cpu, now
 
