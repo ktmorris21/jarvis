@@ -23,7 +23,7 @@ async def _worker_jpeg():
         timeout=2,
     )
     try:
-        writer.write(b'{"command":"capture"}\\n'.replace(b"\\n", b"\n"))
+        writer.write((json.dumps({"command": "capture"}) + "\n").encode())
         await writer.drain()
         raw = await asyncio.wait_for(reader.readline(), timeout=12)
         if not raw or len(raw) > 2_200_000:
