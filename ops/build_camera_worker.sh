@@ -15,7 +15,12 @@ command -v meson >/dev/null
 # expected isolated libcamera, not the incompatible Ubuntu system copy.
 meson devenv -C "$SOURCE/build" -- /bin/bash -c '
 set -euo pipefail
-pkg-config --modversion libcamera
+version="$(pkg-config --modversion libcamera)"
+echo "Resolved libcamera version: $version"
+case "$version" in
+  0.3.*) ;;
+  *) echo "Refusing to link against non-0.3 libcamera: $version" >&2; exit 1;;
+esac
 pkg-config --variable=libdir libcamera
 c++ -std=c++17 -O2 -pthread "$1" -o "$2" \
   $(pkg-config --cflags --libs libcamera)
