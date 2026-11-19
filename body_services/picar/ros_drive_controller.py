@@ -21,6 +21,9 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from std_srvs.srv import SetBool
+from std_msgs.msg import String
+import json
+from datetime import datetime, timezone
 
 from .hardware import PiCarHardware
 
@@ -63,15 +66,24 @@ class RosDriveController(Node):
             self.get_logger().warning("HARDWARE AVAILABLE, DISARMED: no movement until explicitly armed")
         else:
             self.get_logger().info("DRY RUN: hardware not initialized; arming unavailable")
+        self.diag_publisher = self.create_publisher(String, "/jarvis/diagnostics/events", 20)
         self.create_subscription(Twist, "/cmd_vel", self.on_command, 10)
         self.create_service(SetBool, "/jarvis_drive/set_armed", self.set_armed)
         self.create_timer(0.05, self.on_watchdog)
 
+    def diagnostic(self, kind, reason, **extra):
+        record = {"component": "drive", "kind": kind, "reason": reason,
+                  "at": datetime.now(timezone.utc).isoformat(),
+                  "armed": self.armed, "hardware_enabled": self.hw is not None, **extra}
+        self.diag_publisher.publish(String(data=json.dumps(record, allow_nan=False)))
+
     def stop(self, reason):
+        was_moving = self.in_motion
         if self.hw is not None:
             self.hw.stop()
         if self.in_motion:
             self.get_logger().warning("STOP: " + reason)
+            self.diagnostic("motor_stop", reason, cmd_age_s=(round(time.monotonic() - self.last_valid_at, 3) if self.last_valid_at is not None else None))
         self.in_motion = False
 
     def disarm(self, reason):
@@ -81,6 +93,7 @@ class RosDriveController(Node):
         self.timed_out = True
         self.stop(reason)
         self.get_logger().warning("DISARMED: " + reason)
+        self.diagnostic("motor_disarmed", reason)
 
     def set_armed(self, request, response):
         if not request.data:
@@ -99,6 +112,7 @@ class RosDriveController(Node):
             self.last_valid_at = None
             self.timed_out = False
             self.get_logger().warning("ARMED: remains armed through ordinary stops and timeouts")
+            self.diagnostic("motor_armed", "operator arm")
             response.success = True
             response.message = "Armed; remains armed until disarm, fault or service restart"
         except Exception as exc:
@@ -154,6 +168,7 @@ class RosDriveController(Node):
             self.timed_out = False
         except Exception as exc:
             self.disarm("invalid command or hardware error")
+            self.diagnostic("drive_fault", "invalid command or hardware error", error_type=type(exc).__name__)
             self.get_logger().error(f"Command rejected: {type(exc).__name__}: {exc}")
 
     def on_watchdog(self):
