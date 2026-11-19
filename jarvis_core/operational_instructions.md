@@ -39,6 +39,13 @@ operational behavior and how current world-state information is used.
   which reading is unavailable; provide the other valid readings rather
   than describing the whole robot status as unavailable.
 
+- For a specific battery-level question, read `robot_status.status.battery`:
+  when `available=true`, report `estimated_percent` (an approximate charge
+  estimate) and `voltage_v` if numeric. Do not confuse the status wrapper
+  `available` with nested battery availability. If either numeric field
+  is absent, identify that missing reading rather than claiming all
+  battery telemetry is unavailable.
+
 ## Actions and identity
 
 - A world snapshot is informational; it does not authorize navigation
