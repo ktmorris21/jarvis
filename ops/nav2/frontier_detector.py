@@ -23,6 +23,9 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import String
+from datetime import datetime, timezone
+import json
 
 
 class FrontierDetector(Node):
@@ -68,12 +71,20 @@ class FrontierDetector(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                          durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(OccupancyGrid, "/map", self.on_map, qos)
+        self._diagnostics = self.create_publisher(String, "/jarvis/diagnostics/events", 20)
         self._markers = self.create_publisher(MarkerArray, "/jarvis/exploration/frontiers", qos)
         self._selection = self.create_publisher(MarkerArray, "/jarvis/exploration/selection", qos)
         self._selected_path = self.create_publisher(Path, "/jarvis/exploration/selected_path", qos)
         self.create_timer(float(self.get_parameter("update_period_seconds").value),
                           self.publish_frontiers)
         self.get_logger().info("Frontier preview active; autonomous navigation DISABLED until explicit start")
+
+    def diagnostic(self, kind, reason, **extra):
+        record = {"component": "exploration", "kind": kind, "reason": reason,
+                  "at": datetime.now(timezone.utc).isoformat(),
+                  "mode": self._mode, "goals_completed": self._completed_goals,
+                  "consecutive_failures": self._failure_count, **extra}
+        self._diagnostics.publish(String(data=json.dumps(record, allow_nan=False)))
 
     def on_map(self, message):
         self._latest_map = message
@@ -118,6 +129,7 @@ class FrontierDetector(Node):
         response.success = True
         response.message = "Exploration enabled; motors must be armed separately"
         self.get_logger().warning("EXPLORATION STARTED by explicit ROS service command")
+        self.diagnostic("exploration_started", "operator request")
         return response
 
     def stop_exploration(self, request, response):
@@ -144,6 +156,7 @@ class FrontierDetector(Node):
         self._generation += 1
         self._next_batch = time.monotonic() + 2.0
         self.get_logger().warning(f"EXPLORATION HALTED: {reason}")
+        self.diagnostic("exploration_halted", reason)
         if self._navigation_handle is not None:
             try:
                 self._navigation_handle.cancel_goal_async()
@@ -169,6 +182,7 @@ class FrontierDetector(Node):
         self._last_reason = reason
         self.get_logger().warning(
             f"Exploration goal failed ({self._failure_count}/3): {reason}")
+        self.diagnostic("exploration_goal_failed", reason, target={"x": round(position.x, 3), "y": round(position.y, 3)})
         if self._failure_count >= 3:
             self.halt_exploration("Three consecutive failed Nav2 goals")
         else:
@@ -193,6 +207,7 @@ class FrontierDetector(Node):
         generation = self._generation
         self._last_reason = f"Navigating to ({stage.x:.2f}, {stage.y:.2f})"
         self.get_logger().warning(f"Sending Nav2 exploration goal: {self._last_reason}")
+        self.diagnostic("exploration_goal_sent", self._last_reason, target={"x": round(stage.x, 3), "y": round(stage.y, 3)})
         try:
             future = self._nav_client.send_goal_async(goal)
             future.add_done_callback(lambda f: self.on_navigation_accepted(f, generation, stage))
@@ -230,6 +245,7 @@ class FrontierDetector(Node):
                 self._failure_count = 0
                 self._last_reason = f"Reached frontier {self._completed_goals}"
                 self.get_logger().info(self._last_reason)
+                self.diagnostic("exploration_goal_succeeded", self._last_reason, target={"x": round(position.x, 3), "y": round(position.y, 3)})
                 # Wait for the map to incorporate newly visible space.
                 self._next_batch = time.monotonic() + 3.0
                 return
