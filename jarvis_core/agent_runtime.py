@@ -21,9 +21,9 @@ _pending_status: dict[str, asyncio.Future] = {}
 _session = None
 # Fresh SDK session; the old session is explicitly cleared once below.
 # Jarvis's long-term memories and operational state are separate from this session.
-PREVIOUS_SESSION_ID = "jarvis-primary-after-20261031-reset"
-SESSION_ID = "jarvis-primary-after-20261105-status-reset"
-SESSION_RESET_MARKER = "jarvis:agent_sdk_history_cleared_20261105"
+PREVIOUS_SESSION_ID = "jarvis-primary-after-20261105-status-reset"
+SESSION_ID = "jarvis-primary-after-20261119-battery-reset"
+SESSION_RESET_MARKER = "jarvis:agent_sdk_history_cleared_20261119_battery"
 
 
 # Only deliberate actions and targeted retrieval belong in the model's tool list.
