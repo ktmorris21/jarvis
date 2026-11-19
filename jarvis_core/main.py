@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import time
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -19,6 +21,7 @@ async def lifespan(app:FastAPI):
     except asyncio.CancelledError: pass
 
 app=FastAPI(title="Jarvis Core v1 Cognitive Context",lifespan=lifespan)
+nav_diagnostic_log = logging.getLogger("jarvis.navigation.diagnostics")
 @app.get("/health")
 async def health(): return {"status":"ok","service":"jarvis-core","phase":"v1-cognitive-context"}
 @app.get("/state")
@@ -252,6 +255,28 @@ async def ws_endpoint(ws:WebSocket,token:str=Query(default="")):
             payload=await ws.receive_json()
             try: event=InterfaceEvent.model_validate(payload)
             except ValidationError as e: await ws.send_json({"type":"error","detail":str(e)}); continue
+            if event.event == "NAV_DIAGNOSTIC":
+                # Operational telemetry belongs in Railway logs, not Core memory or
+                # the agent's conversational context. Accept only the ROS bridge.
+                connection = state.interfaces.get(iid)
+                data = event.data
+                allowed_components = {"drive", "nav2", "exploration"}
+                if (connection is None or connection.interface_type != "ros_status"
+                        or not isinstance(data, dict)
+                        or data.get("component") not in allowed_components
+                        or not isinstance(data.get("kind"), str)
+                        or len(data["kind"]) > 80
+                        or not isinstance(data.get("reason"), str)
+                        or len(data["reason"]) > 256
+                        or len(json.dumps(data)) > 8192):
+                    nav_diagnostic_log.warning("[NAV DIAG REJECTED] source=%s", iid)
+                    continue
+                # Structured single-line logs are searchable by event kind,
+                # goal ID, component, robot and diagnostic timestamp.
+                nav_diagnostic_log.warning("[NAV DIAG] %s", json.dumps({
+                    "source": iid, "received_at": datetime.now(timezone.utc).isoformat(),
+                    **data}, separators=(",", ":"), allow_nan=False))
+                continue
             await handle_event(event,source=iid or "unknown")
     except WebSocketDisconnect: pass
     finally:
