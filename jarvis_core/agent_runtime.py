@@ -69,9 +69,9 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
         raise ValueError("Core operational instructions are empty")
     return (
         identity_instructions()
-        + "\\n\\n"
+        + "\n\n"
         + guidance
-        + "\\nCurrent world snapshot:\\n"
+        + "\n\nCurrent world snapshot:\n"
         + json.dumps(snapshot, default=str)
     )
 
@@ -348,7 +348,8 @@ async def agent_reply(text: str) -> str:
         log.warning(
             "[ROBOT STATUS] lidar_active=%s scan_age=%s "
             "mapping_available=%s map_recent=%s map_age=%s "
-            "pose_available=%s battery_available=%s battery_error=%s "
+            "pose_available=%s battery_available=%s battery_voltage_v=%s "
+            "battery_estimated_percent=%s battery_error=%s "
             "exploration_available=%s exploration_mode=%s",
             readings.get("lidar", {}).get("active"),
             readings.get("lidar", {}).get("last_scan_age_seconds"),
@@ -357,6 +358,8 @@ async def agent_reply(text: str) -> str:
             readings.get("mapping", {}).get("last_map_age_seconds"),
             readings.get("pose", {}).get("available"),
             readings.get("battery", {}).get("available"),
+            readings.get("battery", {}).get("voltage_v"),
+            readings.get("battery", {}).get("estimated_percent"),
             readings.get("battery", {}).get("error"),
             readings.get("exploration", {}).get("available"),
             readings.get("exploration", {}).get("mode"),
