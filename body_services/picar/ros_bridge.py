@@ -110,17 +110,21 @@ class RosStatusNode(Node):
 
     def _cmd_callback(self, msg):
         with self._lock:
-            self._cmd = {"linear_x": round(float(msg.linear.x), 4),
-                         "angular_z": round(float(msg.angular.z), 4)}
+            self._cmd = ({"linear_x": round(float(msg.linear.x), 4),
+                          "angular_z": round(float(msg.angular.z), 4)}
+                         if math.isfinite(msg.linear.x) and math.isfinite(msg.angular.z)
+                         else None)
             self._cmd_at = time.monotonic()
 
     def _odom_callback(self, msg):
         with self._lock:
             p = msg.pose.pose.position
             t = msg.twist.twist
-            self._odom = {"x": round(float(p.x), 3), "y": round(float(p.y), 3),
-                          "linear_x": round(float(t.linear.x), 4),
-                          "angular_z": round(float(t.angular.z), 4)}
+            values = (p.x, p.y, t.linear.x, t.angular.z)
+            self._odom = ({"x": round(float(p.x), 3), "y": round(float(p.y), 3),
+                           "linear_x": round(float(t.linear.x), 4),
+                           "angular_z": round(float(t.angular.z), 4)}
+                          if all(math.isfinite(v) for v in values) else None)
             self._odom_at = time.monotonic()
 
     def _lower_scan_callback(self, msg):
