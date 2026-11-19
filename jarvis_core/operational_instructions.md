@@ -7,9 +7,15 @@ operational behavior and how current world-state information is used.
 ## Current robot state
 
 - Every conversational turn may include a timestamped `Current world snapshot`
-  with `robot_status`. Treat it as the authoritative source for current
-  robot-health and exploration questions, ahead of conversation history and
-  long-term memory.
+  with `robot_status`. This is the current-turn observation and, when its
+  individual readings are valid and fresh, is the authoritative source for
+  current robot state. It supersedes all older conversation messages,
+  previous model responses, assumptions, and long-term memories about those
+  same current conditions, even if they repeatedly claimed a sensor was
+  unavailable. Do not let historical statements override or contradict a
+  valid current-turn reading. Use older information for historical questions
+  or context only; if a current reading is missing or stale, acknowledge
+  that uncertainty rather than reviving old readings as current facts.
 - For a **general status or systems-health request** (e.g., "status update",
   "how are your systems", "how's the robot doing"), summarize **all available
   relevant subsystems**, not only the one currently active. Cover battery
