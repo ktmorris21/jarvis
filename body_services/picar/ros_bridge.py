@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import math
+import queue
 import os
 import subprocess
 from pathlib import Path
@@ -14,7 +15,10 @@ import time
 from datetime import datetime, timezone
 
 import rclpy
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Twist
+from nav_msgs.msg import Odometry
+from action_msgs.msg import GoalStatusArray
+from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -61,12 +65,24 @@ class RosStatusNode(Node):
         self.last_map_stamp = None
         self.map_dimensions = None
         self._lock = threading.Lock()
+        self._diagnostic_queue = queue.Queue(maxsize=300)
+        self._cmd = None
+        self._cmd_at = None
+        self._odom = None
+        self._odom_at = None
+        self._nav_goal_status = {}
         self._battery_cache = None
         self._battery_last_checked = 0.0
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(LaserScan, scan_topic, self._scan_callback, qos_profile_sensor_data)
         self.create_subscription(OccupancyGrid, map_topic, self._map_callback, map_qos)
+        self.create_subscription(Twist, "/cmd_vel", self._cmd_callback, 10)
+        self.create_subscription(Odometry, "/odom_rf2o", self._odom_callback, qos_profile_sensor_data)
+        self.create_subscription(LaserScan, "/scan_lower", self._lower_scan_callback, qos_profile_sensor_data)
+        self.last_lower_scan_at = None
+        self.create_subscription(String, "/jarvis/diagnostics/events", self._diagnostic_callback, 20)
+        self.create_subscription(GoalStatusArray, "/navigate_to_pose/_action/status", self._nav_status_callback, 10)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.exploration_services = {
@@ -91,6 +107,69 @@ class RosStatusNode(Node):
                 "width": msg.info.width, "height": msg.info.height,
                 "resolution_m": round(float(msg.info.resolution), 4),
             }
+
+    def _cmd_callback(self, msg):
+        with self._lock:
+            self._cmd = {"linear_x": round(float(msg.linear.x), 4),
+                         "angular_z": round(float(msg.angular.z), 4)}
+            self._cmd_at = time.monotonic()
+
+    def _odom_callback(self, msg):
+        with self._lock:
+            p = msg.pose.pose.position
+            t = msg.twist.twist
+            self._odom = {"x": round(float(p.x), 3), "y": round(float(p.y), 3),
+                          "linear_x": round(float(t.linear.x), 4),
+                          "angular_z": round(float(t.angular.z), 4)}
+            self._odom_at = time.monotonic()
+
+    def _lower_scan_callback(self, msg):
+        with self._lock:
+            self.last_lower_scan_at = time.monotonic()
+
+    def _diagnostic_snapshot(self):
+        with self._lock:
+            now = time.monotonic()
+            return {"cmd_vel": dict(self._cmd) if self._cmd else None,
+                    "cmd_age_s": age_seconds(self._cmd_at, now),
+                    "odom_rf2o": dict(self._odom) if self._odom else None,
+                    "odom_age_s": age_seconds(self._odom_at, now),
+                    "upper_scan_age_s": age_seconds(self.last_scan_at, now),
+                    "lower_scan_age_s": age_seconds(self.last_lower_scan_at, now),
+                    "map_age_s": age_seconds(self.last_map_at, now)}
+
+    def _enqueue_diagnostic(self, record):
+        record["snapshot"] = self._diagnostic_snapshot()
+        try:
+            self._diagnostic_queue.put_nowait(record)
+        except queue.Full:
+            # Local journal contains the dropped event even when Core is disconnected.
+            self.get_logger().error("NAV_DIAG_QUEUE_FULL " + json.dumps(record, allow_nan=False))
+        self.get_logger().info("NAV_DIAG_LOCAL " + json.dumps(record, allow_nan=False))
+
+    def _diagnostic_callback(self, msg):
+        try:
+            record = json.loads(msg.data)
+            if not isinstance(record, dict) or len(msg.data) > 4096:
+                return
+            self._enqueue_diagnostic(record)
+        except (ValueError, TypeError):
+            self.get_logger().warning("Invalid diagnostic event payload")
+
+    def _nav_status_callback(self, msg):
+        latest = {}
+        for item in msg.status_list:
+            key = bytes(item.goal_info.goal_id.uuid).hex()
+            latest[key] = int(item.status)
+            if self._nav_goal_status.get(key) != int(item.status):
+                kind = {1: "nav_goal_accepted", 2: "nav_goal_executing",
+                        3: "nav_goal_canceling", 4: "nav_goal_succeeded",
+                        5: "nav_goal_canceled", 6: "nav_goal_aborted"}.get(int(item.status))
+                if kind:
+                    self._enqueue_diagnostic({"component": "nav2", "kind": kind,
+                        "reason": kind, "at": utc_now(), "goal_id": key})
+        # Only keep goals reported in the latest status publication.
+        self._nav_goal_status = latest
 
     def battery_status(self):
         """Read ADC out of process; do not instantiate PiCarx in this ROS process."""
@@ -208,6 +287,25 @@ def ros_spin(node, stop):
         executor.shutdown()
 
 
+async def send_diagnostics(ws, node):
+    """Ship only discrete events; never place raw scan/velocity streams on the wire."""
+    while True:
+        try:
+            item = node._diagnostic_queue.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.2)
+            continue
+        try:
+            await ws.send(json.dumps({"type": "event", "event": "NAV_DIAGNOSTIC",
+                                      "timestamp": utc_now(), "data": item}, allow_nan=False))
+        except Exception:
+            try:
+                node._diagnostic_queue.put_nowait(item)
+            except queue.Full:
+                node.get_logger().error("NAV_DIAG_REQUEUE_FULL " + json.dumps(item))
+            raise
+
+
 async def bridge_loop(args, node):
     url = args.url.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
     url += "/ws?token=" + args.token
@@ -223,53 +321,64 @@ async def bridge_loop(args, node):
                 if reply.get("type") != "hello_ack":
                     raise RuntimeError("Core rejected bridge hello")
                 print("ROS bridge connected to Core", flush=True)
-                async for raw in ws:
-                    command = json.loads(raw)
-                    if command.get("type") != "command":
-                        continue
-                    ability = command.get("ability")
-                    if command.get("data") not in (None, {}):
-                        result, status, error = None, "failed", "exploration/status commands take no arguments"
-                    elif ability == "get_robot_status":
-                        try:
-                            result = node.status(args.robot_id)
-                            # Enrich the existing per-turn context with live
-                            # exploration state, without another LLM tool call.
-                            # A missing/busy exploration service must NOT
-                            # make the robot health snapshot unavailable.
-                            try:
-                                exploration = await call_exploration_service(
-                                    node, "exploration_status", timeout=0.7)
-                                result["exploration"] = parse_exploration_status(exploration)
-                            except Exception as exc:
-                                result["exploration"] = {
-                                    "available": False, "reason": type(exc).__name__}
-                            status, error = "complete", None
-                        except Exception as exc:
-                            result, status, error = None, "failed", type(exc).__name__
-                    elif ability in node.exploration_services:
-                        try:
-                            result = await call_exploration_service(node, ability)
-                            status = "complete" if result["success"] else "failed"
-                            error = None if result["success"] else result["message"]
-                        except Exception as exc:
-                            result, status, error = None, "failed", type(exc).__name__
-                    else:
-                        result, status, error = None, "failed", "Unsupported ROS bridge command"
-                    await ws.send(json.dumps({
-                        "type": "event", "event": "COMMAND_RESULT", "timestamp": utc_now(),
-                        "data": {
-                            "command_id": command.get("command_id"),
-                            "ability": ability, "status": status,
-                            "result": result, "error": error,
-                        },
-                    }, allow_nan=False))
+                diagnostic_task = asyncio.create_task(send_diagnostics(ws, node))
+                try:
+                    await receive_core_commands(ws, args, node)
+                finally:
+                    diagnostic_task.cancel()
+                    try:
+                        await diagnostic_task
+                    except asyncio.CancelledError:
+                        pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             print(f"ROS bridge disconnected ({type(exc).__name__}); reconnecting", flush=True)
             await asyncio.sleep(3)
 
+
+async def receive_core_commands(ws, args, node):
+    async for raw in ws:
+        command = json.loads(raw)
+        if command.get("type") != "command":
+            continue
+        ability = command.get("ability")
+        if command.get("data") not in (None, {}):
+            result, status, error = None, "failed", "exploration/status commands take no arguments"
+        elif ability == "get_robot_status":
+            try:
+                result = node.status(args.robot_id)
+                # Enrich the existing per-turn context with live
+                # exploration state, without another LLM tool call.
+                # A missing/busy exploration service must NOT
+                # make the robot health snapshot unavailable.
+                try:
+                    exploration = await call_exploration_service(
+                        node, "exploration_status", timeout=0.7)
+                    result["exploration"] = parse_exploration_status(exploration)
+                except Exception as exc:
+                    result["exploration"] = {
+                        "available": False, "reason": type(exc).__name__}
+                status, error = "complete", None
+            except Exception as exc:
+                result, status, error = None, "failed", type(exc).__name__
+        elif ability in node.exploration_services:
+            try:
+                result = await call_exploration_service(node, ability)
+                status = "complete" if result["success"] else "failed"
+                error = None if result["success"] else result["message"]
+            except Exception as exc:
+                result, status, error = None, "failed", type(exc).__name__
+        else:
+            result, status, error = None, "failed", "Unsupported ROS bridge command"
+        await ws.send(json.dumps({
+            "type": "event", "event": "COMMAND_RESULT", "timestamp": utc_now(),
+            "data": {
+                "command_id": command.get("command_id"),
+                "ability": ability, "status": status,
+                "result": result, "error": error,
+            },
+        }, allow_nan=False))
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only ROS status bridge for Jarvis Core")
