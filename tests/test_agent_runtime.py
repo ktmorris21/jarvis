@@ -220,3 +220,19 @@ def test_camera_result_does_not_persist_image_payload(monkeypatch):
     assert outcome["persisted"] is False
     assert delivered[0]["result"]["images"][0]["jpeg_base64"] == image
     assert image not in str(records)
+
+
+def test_status_snapshot_has_real_line_breaks_and_numeric_battery(monkeypatch):
+    from jarvis_core import agent_runtime
+    monkeypatch.setattr(agent_runtime.repository, "goals", lambda *args: [])
+    monkeypatch.setattr(agent_runtime, "identity_instructions", lambda: "# Test identity")
+    status = {"available": True, "status": {
+        "battery": {"available": True, "voltage_v": 7.81, "estimated_percent": 67}
+    }}
+    text = baseline_context(robot_status_context=status)
+    assert "# Test identity\n\n" in text
+    assert "\n\nCurrent world snapshot:\n{" in text
+    assert "\\nCurrent world snapshot" not in text
+    assert '"voltage_v": 7.81' in text
+    assert '"estimated_percent": 67' in text
+    assert "robot_status.status.battery" in text
