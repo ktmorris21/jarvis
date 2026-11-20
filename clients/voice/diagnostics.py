@@ -20,9 +20,9 @@ MAX_REPORT = 14500
 
 def clean(text):
     # Defense in depth: diagnostics should never intentionally include secrets.
-    text = re.sub(r"(?i)(bearer\\s+)[^\\s]+", r"\\1[REDACTED]", text)
-    text = re.sub(r"(?i)((?:token|password|api_key|secret)\\s*[=:]\\s*)[^\\s,]+",
-                  r"\\1[REDACTED]", text)
+    text = re.sub(r"(?i)(bearer\s+)[^\s]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)((?:token|password|api_key|secret)\s*[=:]\s*)[^\s,]+",
+                  r"\1[REDACTED]", text)
     return text[-MAX_SECTION:]
 
 def run(argv, timeout=5):
