@@ -27,6 +27,24 @@ def normalize(utterance):
     text = re.sub(r"^(?:hey )?jarvis\s+", "", text)
     return re.sub(r"\s+(?:please)$", "", text).strip()
 
+def match_local_command(normalized):
+    """Strict command match with narrowly tolerated repeated STOP/wake words.
+
+    Vosk can merge the command, a repeat, and an adjacent wake phrase in
+    one utterance. Only normalize those fragments for STOP; do not broaden
+    arming, disarming or other management-command matching.
+    """
+    direct = COMMANDS.get(normalized)
+    if direct is not None:
+        return direct
+    # Permit an adjacent repeated "stop" or trailing wake phrase, but
+    # never extract 'stop' from an arbitrary sentence or unsafe negation.
+    if re.fullmatch(r"(?:stop(?: moving| movement)?)(?: stop| hey jarvis| jarvis)+",
+                    normalized):
+        return "stop"
+    return None
+
+
 COMMANDS = {
     "stop": "stop",
     "stop moving": "stop",
@@ -245,7 +263,7 @@ class LocalCommands:
                     print("[LOCAL] Arm failed:", repr(exc), flush=True)
                     return True, "I couldn't arm the motors. Check the drive service.", None
             # A different recognized command may still be handled normally.
-        action = COMMANDS.get(normalized)
+        action = match_local_command(normalized)
         if action is None:
             return False, None, None
         if action == "diagnostics":
