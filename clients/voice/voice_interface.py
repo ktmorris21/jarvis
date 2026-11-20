@@ -190,6 +190,21 @@ async def listen_for_command(model, head):
                 await head.set("listening")
                 break
 
+        # Preserve the existing head listening cue. Release the microphone
+        # before speaking so Jarvis never transcribes his own acknowledgment.
+        stop_microphone(proc)
+        proc = None
+        try:
+            await play_local_response("I'm here.", device=DEVICE)
+            print("[WAKE] Acknowledged; now listening for command", flush=True)
+        except Exception as exc:
+            print("[WAKE] Acknowledgment unavailable:", repr(exc), flush=True)
+        # This is now a two-step exchange: "Hey Jarvis", acknowledgment,
+        # then the command. Speech overlapping the acknowledgment is not
+        # captured; don't pretend same-breath commands are supported.
+        pre_roll.clear()
+        proc = start_microphone()
+
         # Estimate ambient noise from quieter recent frames.
         baseline = float(np.percentile(
             list(ambient_levels), 35
@@ -232,9 +247,13 @@ async def listen_for_command(model, head):
 
             # Allow time for the command to begin,
             # even if there's a short pause after wake.
+            if not voice_detected:
+                if elapsed >= 5.0:
+                    ended_by = "no command"
+                    break
+                continue
             if elapsed < MIN_AFTER_WAKE_SECONDS:
                 continue
-
             if elapsed - last_voice >= END_SILENCE_SECONDS:
                 ended_by = "silence"
                 break
@@ -249,7 +268,8 @@ async def listen_for_command(model, head):
         return make_wav(b"".join(audio_frames))
 
     finally:
-        stop_microphone(proc)
+        if proc is not None:
+            stop_microphone(proc)
 
 
 async def listen_for_followup(head, deadline):
@@ -562,17 +582,17 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                             "type": "event", "event": "PI_DIAGNOSTIC_UPLOAD",
                             "timestamp": timestamp(), "data": report,
                         }))
-                        reply = "Diagnostics uploaded. Report " + report["report_id"] + "."
+                        reply = "Diagnostics uploaded."
                         print("[PI DIAG] Sent report " + report["report_id"], flush=True)
                     except Exception as exc:
                         print("[PI DIAG] Upload failed:", repr(exc), flush=True)
-                        reply = "Diagnostic upload failed. Check the local voice logs."
+                        reply = "Diagnostic upload failed."
                     power_action = None
                 print("[LOCAL]", reply, flush=True)
                 await head.set("speaking")
                 playback_ok = False
                 try:
-                    await play_local_response(reply, device=DEVICE, fallback=play_piper)
+                    await play_local_response(reply, device=DEVICE)
                     playback_ok = True
                 except Exception as exc:
                     print("[LOCAL] Audio playback failed:", repr(exc), flush=True)
@@ -588,7 +608,7 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                     except Exception as exc:
                         print("[LOCAL] System action failed:", repr(exc), flush=True)
                         try:
-                            await play_local_response("Local command failed.", device=DEVICE, fallback=play_piper)
+                            await play_local_response("Local command failed.", device=DEVICE)
                         except Exception:
                             pass
                 elif reply:
@@ -649,7 +669,7 @@ async def speak_boot_announcement(head):
             return
         await head.set("speaking")
         try:
-            await play_local_response(BOOT_GREETING, device=DEVICE, fallback=play_piper)
+            await play_local_response(BOOT_GREETING, device=DEVICE)
             mark_boot_announced(boot_id)
             print("[BOOT] Announced: " + BOOT_GREETING, flush=True)
         finally:
