@@ -32,6 +32,8 @@ class Dummy:
 
 def grid():
     g = Dummy()
+    g.header = Dummy()
+    g.header.frame_id = "map"
     g.info = Dummy()
     g.info.width = 80
     g.info.height = 80
