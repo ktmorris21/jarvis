@@ -37,7 +37,7 @@ class DiagnosticsTests(unittest.TestCase):
         voice = next(cmd for cmd in journals
                      if "jarvis-agents-voice.service" in cmd)
         self.assertIn("Stop request failed", " ".join(voice))
-        self.assertIn("operator stop goal", " ".join(journals))
+        self.assertIn("operator stop goal", " ".join(" ".join(cmd) for cmd in journals))
 
 
     def test_redacts_credentials_and_bounds_sections(self):
