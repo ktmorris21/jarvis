@@ -57,9 +57,13 @@ class RosDriveController(Node):
         self.hw = None
         self.armed = False
         self.armed_at = None
+        self.stop_inhibited = False
+        self.stop_quiet_since = None
         self.last_valid_at = None
         self.in_motion = False
         self.timed_out = False
+        self.stop_inhibited = False
+        self.stop_quiet_since = None
         if hardware_enabled:
             self.hw = PiCarHardware(mock=False)
             self.hw.stop()
@@ -70,6 +74,7 @@ class RosDriveController(Node):
         self.create_subscription(Twist, "/cmd_vel", self.on_command, 10)
         self.create_service(SetBool, "/jarvis_drive/set_armed", self.set_armed)
         self.create_service(Trigger, "/jarvis_drive/status", self.get_status)
+        self.create_service(Trigger, "/jarvis_drive/stop_goal", self.stop_goal)
         self.create_timer(0.05, self.on_watchdog)
 
     def diagnostic(self, kind, reason, **extra):
@@ -103,8 +108,21 @@ class RosDriveController(Node):
                                        "hardware_enabled": self.hw is not None})
         return response
 
+    def stop_goal(self, request, response):
+        """Stop active drive output without changing explicit motor arming."""
+        self.stop_inhibited = True
+        self.stop_quiet_since = None
+        self.last_valid_at = None
+        self.stop("operator stop goal")
+        self.diagnostic("goal_stop_inhibit", "operator stop goal")
+        response.success = True
+        response.message = "Motor output stopped; drive held until command stream becomes quiet"
+        return response
+
     def set_armed(self, request, response):
         if not request.data:
+            self.stop_inhibited = False
+            self.stop_quiet_since = None
             self.disarm("operator request")
             response.success = True
             response.message = "Disarmed; motors stopped"
@@ -115,6 +133,8 @@ class RosDriveController(Node):
             return response
         try:
             self.stop("arming reset")
+            self.stop_inhibited = False
+            self.stop_quiet_since = None
             self.armed = True
             self.armed_at = time.monotonic()
             self.last_valid_at = None
@@ -130,6 +150,19 @@ class RosDriveController(Node):
         return response
 
     def on_command(self, msg):
+        if self.stop_inhibited:
+            # Keep rejecting nonzero commands until navigation actually goes
+            # quiet. Never release merely because a wall-clock delay elapsed.
+            try:
+                quiet = (math.isfinite(msg.linear.x) and math.isfinite(msg.angular.z)
+                         and abs(msg.linear.x) < 1e-8 and abs(msg.angular.z) < 1e-8)
+            except (TypeError, ValueError):
+                quiet = False
+            if not quiet:
+                self.stop_quiet_since = None
+            elif self.stop_quiet_since is None:
+                self.stop_quiet_since = time.monotonic()
+            return
         # In hardware mode, commands are ignored unless explicitly armed.
         if self.hw is not None and not self.armed:
             return
@@ -181,6 +214,11 @@ class RosDriveController(Node):
 
     def on_watchdog(self):
         now = time.monotonic()
+        if self.stop_inhibited and self.stop_quiet_since is not None and now-self.stop_quiet_since >= 0.75:
+            self.stop_inhibited = False
+            self.stop_quiet_since = None
+            self.get_logger().warning("GOAL STOP INHIBIT RELEASED after quiet command stream")
+            self.diagnostic("goal_stop_released", "quiet command stream")
         if self.last_valid_at is None or self.timed_out:
             return
         timeout = float(self.get_parameter("cmd_timeout_s").value)
