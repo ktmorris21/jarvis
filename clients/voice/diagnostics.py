@@ -4,6 +4,7 @@ No arbitrary shell, sensitive voice transcripts, environment dumps or credential
 files. Railway stores the result in its operational logs, not Jarvis memory.
 """
 import asyncio
+import json
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -81,7 +82,7 @@ def collect_sync():
         "sections": sections,
     }
     # Predictably cap the wire/log payload even when local commands are noisy.
-    while len(str(report)) > MAX_REPORT and any(
+    while len(json.dumps(report, ensure_ascii=True)) > MAX_REPORT and any(
             key.startswith("journal:") and len(val) > 200
             for key, val in sections.items()):
         key = max((key for key in sections if key.startswith("journal:")),
