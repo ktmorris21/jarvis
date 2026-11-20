@@ -238,6 +238,30 @@ best-effort redaction; restrict Railway log access. The upload requires an
 active Core WebSocket; without it Jarvis says the upload failed. This is
 intended for supervised, occasional troubleshooting, not continuous telemetry.
 
+### Diagnosing an ineffective voice stop
+
+After using "Hey Jarvis" / "I'm here" / "Stop", request **Upload diagnostics**.
+The report now includes `journal:voice_stop` (wake acknowledgment,
+local stop recognition, stop request failures) and `journal:ros_stop`
+(the Nav2 stop service and drive inhibit outcomes). It does **not** upload
+ordinary speech transcripts or microphone audio.
+
+A stationary test is preferable first: leave the motors **disarmed**, say
+"Hey Jarvis", wait for "I'm here", say "Stop", then request "Upload
+diagnostics". If the local ROS stop command is functioning, the Nav2
+journal should log `VOICE_STOP_REQUESTED`, and the drive journal should
+record the stop inhibit. Only repeat an armed moving-goal test under
+supervision after that stationary confirmation. A voice command is not an
+emergency-stop substitute.
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m unittest discover -s tests -p 'test_diagnostics.py'
+sudo systemctl restart jarvis-agents-voice.service
+```
+
 ### Navigation-failure context (new)
 
 Diagnostics now find up to **two recent failed navigation goals** in the last
