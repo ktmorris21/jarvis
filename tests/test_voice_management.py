@@ -17,6 +17,32 @@ class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
         local.transcribe = lambda wav, grammar=None: words.pop(0)
         return local
 
+    async def test_stop_local_and_non_disarming(self):
+        local = self.make_local(["stop"])
+        calls = []
+        async def request():
+            calls.append("ros_stop")
+        local._stop_ros_goals = request
+        self.assertEqual(await local.act(b""), (True, "Stop requested.", None))
+        self.assertEqual(calls, ["ros_stop"])
+
+    async def test_stop_works_with_pending_arm_confirmation(self):
+        local = self.make_local(["arm motors", "stop"])
+        async def request():
+            return None
+        local._stop_ros_goals = request
+        await local.act(b"")
+        self.assertEqual(await local.act(b""), (True, "Stop requested.", None))
+        self.assertIsNone(local.pending)
+
+    async def test_stop_failure_is_local(self):
+        local = self.make_local(["stop"])
+        async def request():
+            raise RuntimeError("ROS unavailable")
+        local._stop_ros_goals = request
+        self.assertEqual(await local.act(b""),
+            (True, "Stop command failed. Use the physical power switch.", None))
+
     async def test_upload_is_explicit_no_confirmation(self):
         local = self.make_local(["upload diagnostics"])
         handled, reply, deferred = await local.act(b"")
@@ -51,7 +77,8 @@ class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await local.is_closing_phrase(b""))
 
     def test_grammar_contains_management_commands(self):
-        for phrase in ("update jarvis", "confirm update jarvis",
+        for phrase in ("stop", "stop moving", "stop movement",
+                       "update jarvis", "confirm update jarvis",
                        "upload diagnostics"):
             self.assertIn(phrase, LOCAL_GRAMMAR)
         self.assertEqual(normalize("Hey Jarvis, upload diagnostics please"),
