@@ -16,6 +16,7 @@ import time
 import wave
 from io import BytesIO
 from pathlib import Path
+from ros_stop_client import PersistentStopClient
 
 DEFAULT_MODEL_PATH = "/home/shadowfax/jarvis/models/vosk-model-small-en-us-0.15"
 CONFIRM_SECONDS = 20
@@ -109,6 +110,7 @@ class LocalCommands:
         self.pending = None
         self.pending_until = 0.0
         self._recognizer_model = None
+        self._stop_client = PersistentStopClient()
         self.model_path = Path(model_path or os.environ.get("JARVIS_VOSK_MODEL", DEFAULT_MODEL_PATH))
         if self.model_path.is_dir():
             try:
@@ -174,15 +176,17 @@ class LocalCommands:
         ]
         return await self._run(args, timeout=12)
 
+    async def start_stop_client(self):
+        """Prewarm ROS discovery before a voice stop is needed."""
+        await self._stop_client.start()
+
+    async def close(self):
+        await self._stop_client.close()
+
     async def _stop_ros_goals(self):
-        # Fixed local ROS service; no cloud call, model tool or arbitrary input.
-        args = [
-            "/bin/bash", "-c",
-            "source /opt/ros/jazzy/setup.bash && "
-            "source /home/shadowfax/ros2_ws/install/setup.bash && "
-            'exec ros2 service call /jarvis/motion/stop std_srvs/srv/Trigger "{}"',
-        ]
-        return await self._run(args, timeout=8)
+        # Fixed local ROS service through an already-running rclpy client.
+        # Fail closed if the service cannot acknowledge the request.
+        return await self._stop_client.stop()
 
     async def _run(self, argv, timeout=12):
         proc = await asyncio.create_subprocess_exec(
