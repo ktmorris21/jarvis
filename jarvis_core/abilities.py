@@ -1,6 +1,7 @@
 """Core-owned, shared tool schemas and execution for text and voice models."""
 import asyncio
 import logging
+import math
 import time
 from fastapi import HTTPException
 from .config import settings
@@ -51,6 +52,14 @@ CORE_TOOLS = {
         "parameters": {"type": "object", "properties": {
             "confirmation": {"type": "string", "enum": ["REBOOT JARVIS NOW"]},
         }, "required": ["confirmation"], "additionalProperties": False},
+    },
+    "move_relative": {
+        "type": "function", "name": "move_relative",
+        "description": "Move my physical robot straight forward or backward by a specified distance in meters, only when the operator explicitly requests movement. Convert conversational lengths/units to meters. Do not call for vague movement without a distance. This does not arm motors; the Pi checks actual arm state, ROS health and collision clearance. Refusal must be reported, never bypassed. Acceptance is NOT proof movement completed.",
+        "parameters": {"type": "object", "properties": {
+            "direction": {"type": "string", "enum": ["forward", "backward"]},
+            "distance_m": {"type": "number", "minimum": 0.08, "maximum": 0.9144},
+        }, "required": ["direction", "distance_m"], "additionalProperties": False},
     },
     "explore": {
         "type": "function", "name": "explore",
@@ -220,6 +229,15 @@ async def execute_tool(name: str, args: dict):
             raise HTTPException(400, "turtle_status takes no arguments")
         await asyncio.sleep(10)
         return {"status": "The turtle is happy.", "delay_seconds": 10}
+    if name == "move_relative":
+        if (set(args) != {"direction", "distance_m"}
+                or args.get("direction") not in {"forward", "backward"}
+                or type(args.get("distance_m")) not in (float, int)
+                or not math.isfinite(args["distance_m"])
+                or not 0.08 <= args["distance_m"] <= 0.9144):
+            raise HTTPException(400, "Expected forward/backward and distance 0.08–0.9144 meters")
+        from .agent_runtime import relative_motion_command_data
+        return await relative_motion_command_data(args)
     if name in {"explore", "stop_exploring", "exploration_status"}:
         if args:
             raise HTTPException(400, f"{name} takes no arguments")
