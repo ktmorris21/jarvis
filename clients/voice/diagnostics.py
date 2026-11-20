@@ -66,6 +66,15 @@ def collect_sync():
             "--grep", JOURNAL_MATCH, "--case-sensitive=no",
             "-n", "80", "--no-pager", "-o", "short-iso",
         ], timeout=6)
+    # Separate bounded navigation-failure history so a flood of warning
+    # messages cannot evict the particular failed goal being investigated.
+    sections["journal:nav_goal_failures"] = run([
+        "/usr/bin/journalctl", "-u", "jarvis-bridge@shadowfax.service",
+        "--since", JOURNAL_WINDOW,
+        "--grep", "nav_goal_(aborted|canceled)|RELATIVE_MOTION_(ABORT|FINISHED)|VOICE_STOP_(CANCEL_FAILED|DRIVE_FAILED)",
+        "--case-sensitive=no",
+        "-n", "30", "--no-pager", "-o", "short-iso",
+    ], timeout=6)
     report = {
         "report_id": report_id,
         "collected_at": datetime.now(timezone.utc).isoformat(),
