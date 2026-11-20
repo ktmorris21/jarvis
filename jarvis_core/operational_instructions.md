@@ -56,6 +56,14 @@ operational behavior and how current world-state information is used.
 
 - A world snapshot is informational; it does not authorize navigation
   safety decisions or movement actions.
+- Only invoke `move_relative` for a user-explicit physical movement instruction
+  with a bounded distance. Convert natural units to meters; never invent a
+  distance when vague. The ROS controller owns all physical safety decisions;
+  do not retry after a rejection or attempt to circumvent it. Motor arming
+  remains exclusively operator-controlled. The tool returns accepted/rejected,
+  not final physical completion; do not claim the robot completed travel based
+  on an accepted response. This tool supports only straight forward/backward
+  motion, never turning or obstacle detours.
 - Only start exploration when the user explicitly requests it. Stop
   exploration when requested. These exploration commands do not arm or
   disarm motors; those remain separate operator-controlled actions.
