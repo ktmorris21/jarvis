@@ -122,7 +122,9 @@ def test_operational_status_guidance_is_shared_across_identities(monkeypatch):
     assert "# Test identity" in text
     assert "general status or systems-health request" in text
     assert "Navigation/exploration status is not a substitute for systems status" in text
-    assert '"mode": "exploring"' in text
+    assert "Current Core context:" in text
+    assert '"mode": "exploring"' not in text
+    assert '"robot_status"' not in text
 
 
 def test_session_reset_targets_only_prior_agent_conversation(monkeypatch):
@@ -231,8 +233,59 @@ def test_status_snapshot_has_real_line_breaks_and_numeric_battery(monkeypatch):
     }}
     text = baseline_context(robot_status_context=status)
     assert "# Test identity\n\n" in text
-    assert "\n\nCurrent world snapshot:\n{" in text
-    assert "\\nCurrent world snapshot" not in text
-    assert '"voltage_v": 7.81' in text
-    assert '"estimated_percent": 67' in text
+    assert "\n\nCurrent Core context:\n{" in text
+    assert "\\nCurrent Core context" not in text
+    assert '"voltage_v": 7.81' not in text
+    assert '"estimated_percent": 67' not in text
     assert "robot_status.status.battery" in text
+
+
+def test_current_turn_status_is_ephemeral_and_adjacent_to_new_request(monkeypatch):
+    from jarvis_core.agent_runtime import make_current_turn_status_filter
+    from types import SimpleNamespace
+    import sys
+    import types
+
+    class FakeModelInputData:
+        def __init__(self, input, instructions):
+            self.input = input
+            self.instructions = instructions
+
+    monkeypatch.setitem(sys.modules, "agents.run",
+                        types.SimpleNamespace(ModelInputData=FakeModelInputData))
+    status = {"available": True, "status": {
+        "battery": {"available": True, "estimated_percent": 44, "voltage_v": 7.395}
+    }}
+    callback = make_current_turn_status_filter(status)
+    history = [
+        {"role": "user", "content": "You only have an old 59% reading."},
+        {"role": "assistant", "content": "I cannot get a fresh reading."},
+    ]
+    current = {"role": "user", "content": "What is your battery level now?"}
+    original_input = history + [current]
+    prepared = SimpleNamespace(model_data=SimpleNamespace(
+        input=original_input, instructions="Jarvis instructions"
+    ))
+    updated = callback(prepared)
+    assert updated.input[:3] == original_input
+    assert updated.input[3]["role"] == "user"
+    assert '44' in updated.input[3]["content"]
+    assert '7.395' in updated.input[3]["content"]
+    assert "CURRENT-TURN ROBOT TELEMETRY" in updated.input[3]["content"]
+    assert updated.instructions == "Jarvis instructions"
+    assert prepared.model_data.input == original_input
+    # Tool continuation must not duplicate the injected per-turn telemetry.
+    continued = SimpleNamespace(model_data=SimpleNamespace(
+        input=updated.input + [{"type": "function_call_output", "output": "{}"}],
+        instructions=updated.instructions,
+    ))
+    continued_output = callback(continued)
+    assert continued_output.input == continued.model_data.input
+
+
+def test_missing_robot_status_never_reuses_prior_reading(monkeypatch):
+    from jarvis_core.agent_runtime import current_turn_status_text
+    text = current_turn_status_text(None)
+    assert '"available": false' in text
+    assert "Current ROS status unavailable" in text
+    assert "estimated_percent" not in text
