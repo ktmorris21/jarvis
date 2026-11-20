@@ -64,6 +64,7 @@ class RosDriveController(Node):
         self.timed_out = False
         self.stop_inhibited = False
         self.stop_quiet_since = None
+        self.stop_last_nonzero_at = None
         if hardware_enabled:
             self.hw = PiCarHardware(mock=False)
             self.hw.stop()
@@ -112,6 +113,7 @@ class RosDriveController(Node):
         """Stop active drive output without changing explicit motor arming."""
         self.stop_inhibited = True
         self.stop_quiet_since = None
+        self.stop_last_nonzero_at = time.monotonic()
         self.last_valid_at = None
         self.stop("operator stop goal")
         self.diagnostic("goal_stop_inhibit", "operator stop goal")
@@ -160,6 +162,7 @@ class RosDriveController(Node):
                 quiet = False
             if not quiet:
                 self.stop_quiet_since = None
+                self.stop_last_nonzero_at = time.monotonic()
             elif self.stop_quiet_since is None:
                 self.stop_quiet_since = time.monotonic()
             return
@@ -214,11 +217,13 @@ class RosDriveController(Node):
 
     def on_watchdog(self):
         now = time.monotonic()
-        if self.stop_inhibited and self.stop_quiet_since is not None and now-self.stop_quiet_since >= 0.75:
+        if (self.stop_inhibited and self.stop_last_nonzero_at is not None
+                and now-self.stop_last_nonzero_at >= 1.0):
             self.stop_inhibited = False
             self.stop_quiet_since = None
-            self.get_logger().warning("GOAL STOP INHIBIT RELEASED after quiet command stream")
-            self.diagnostic("goal_stop_released", "quiet command stream")
+            self.stop_last_nonzero_at = None
+            self.get_logger().warning("GOAL STOP INHIBIT RELEASED after 1s without nonzero commands")
+            self.diagnostic("goal_stop_released", "no nonzero commands for one second")
         if self.last_valid_at is None or self.timed_out:
             return
         timeout = float(self.get_parameter("cmd_timeout_s").value)
