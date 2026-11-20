@@ -238,3 +238,68 @@ repository reports "Already up to date" without restarting any services.
 systemd unit changes, modify ROS configuration or automatically roll back.
 A failed Git pull leaves the running stack alone; a failure during service
 restart requires manual attention. This is a narrowly bounded first sprint.
+
+## Core-matched offline voice clips and wake acknowledgment
+
+The Pi voice listener retains the **existing head listening animation**. After
+detecting "Hey Jarvis", it pauses microphone capture, plays the locally cached
+**"I'm here."** recording, and only then opens a **fresh microphone capture**
+for the user command. Say **"Hey Jarvis"**, wait for **"I'm here"**, then give
+the command. Same-breath "Hey Jarvis, upload diagnostics" is no longer
+reliably captured because the acknowledgment plays before command capture.
+If nothing is said within 5 seconds after the acknowledgment, it returns to
+wake-word listening without calling Core. Ordinary follow-up conversation
+still uses the existing wake-free follow-up window.
+
+The fixed phrases are created using the **currently selected Core ElevenLabs
+voice**, then stored locally as WAV files. No network or LLM is required to
+speak any installed phrase. In particular, diagnostics say only
+"Diagnostics uploaded." rather than reading the report ID; the ID remains
+in Core's Railway logs. The offline command recognizer remains Vosk and
+confirmation commands are unchanged even though prompts are shorter.
+
+The audio sync is **manual and only needed after changing the Core voice or
+adding a new phrase**. It fetches a strictly allowlisted list and validates all
+WAV responses before atomically replacing individual cache files. It refuses
+to run unless Core's configured speech provider is ElevenLabs. If Core has
+been switched back to Piper, do not run sync until the intended voice is
+configured. The local audio cache isn't automatically overwritten on boot.
+
+### Deployment sequence
+
+1. Deploy the updated Core to Railway (the authenticated
+   `/local-audio/manifest` and `/local-audio/render` endpoints must be live).
+2. Park and disarm the robot. On the Pi, check for uncommitted modifications,
+   then pull from GitHub:
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+sudo install -m 0644 ops/systemd/jarvis-local-audio-sync.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start jarvis-local-audio-sync.service
+sudo journalctl -u jarvis-local-audio-sync.service -n 40 --no-pager
+cat ~/jarvis/cache/local_voice/manifest.json
+```
+
+3. Check the manifest provider, voice ID and model against Core. Only after
+   a successful sync, restart **voice only**:
+
+```bash
+python3 -m py_compile clients/voice/local_audio.py clients/voice/voice_interface.py clients/voice/local_commands.py
+sudo systemctl restart jarvis-agents-voice.service
+sudo journalctl -u jarvis-agents-voice.service -n 40 --no-pager
+```
+
+4. Say "Hey Jarvis", listen for "I'm here", and then say "upload diagnostics".
+   Expect "Diagnostics uploaded." and a new Railway report. Next test
+   "update Jarvis" **without confirming**, verifying the shortened
+   confirmation prompt. Do not test motor arming as part of voice validation.
+
+**Audio fallback policy:** fixed local responses never launch Piper, including
+at wake. If "I'm here" is missing, the service logs the failure and still
+listens; for destructive actions, a failed acknowledgment blocks execution
+as before. If a required phrase isn't cached, repeat the audio sync instead
+of changing the speech provider. Voice selection and API costs are incurred
+only during explicit sync, not per local command.
