@@ -245,7 +245,7 @@ class LocalCommands:
             # systemd owns the updater independently of this voice process.
             await self._run([
                 "/usr/bin/sudo", "-n", "/usr/bin/systemctl",
-                "start", "jarvis-voice-update.service",
+                "--no-block", "start", "jarvis-voice-update.service",
             ], timeout=8)
             return
         if action not in ("reboot", "poweroff"):
