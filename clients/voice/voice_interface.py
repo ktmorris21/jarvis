@@ -265,6 +265,9 @@ async def listen_for_command(model, head):
             flush=True,
         )
 
+        if not voice_detected:
+            print("[WAKE] No command after acknowledgment", flush=True)
+            return None
         return make_wav(b"".join(audio_frames))
 
     finally:
@@ -566,6 +569,9 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                 continue
         else:
             wav = await listen_for_command(model, head)
+            if wav is None:
+                await head.set("idle")
+                continue
             # Don't leave the head in listening posture while Vosk works.
             await head.set("thinking")
 
