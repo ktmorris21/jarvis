@@ -26,6 +26,8 @@ LOCAL_REPLIES = frozenset({
     BOOT_GREETING,
     "I'm here.",
     *(pair[0] for pair in PROMPTS.values()),
+    "Stop requested.",
+    "Stop command failed. Use the physical power switch.",
     "Motors armed.",
     "Motors disarmed.",
     "I couldn't arm the motors. Check the drive service.",
