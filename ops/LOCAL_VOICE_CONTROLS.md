@@ -84,14 +84,58 @@ journalctl -u jarvis-agents-voice.service -n 30 --no-pager
 Look for `HARDWARE AVAILABLE, DISARMED` on the drive service and
 `[LOCAL] Offline Vosk command recognition enabled` on the voice service.
 
+## Persistent stop client rollout (November 2026)
+
+When voice `stop` was tested during active navigation, Vosk recognized
+`stop` but the former one-shot `ros2 service call` timed out after eight
+seconds without reaching the Nav2 service. Stationary tests had succeeded.
+The per-command CLI startup/discovery has now been replaced by two small
+Pi-side modules: `clients/voice/ros_stop_client.py` (async voice IPC owner)
+and `clients/voice/ros_stop_worker.py` (persistent rclpy Trigger client).
+The robot's cancel-all-goals and motor-inhibit services are unchanged.
+
+With Jarvis parked and **disarmed**:
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m unittest discover -s tests -p 'test_ros_stop_client.py'
+python3 -m unittest discover -s tests -p 'test_voice_management.py'
+python3 -m unittest discover -s tests -p 'test_diagnostics.py'
+python3 -m py_compile clients/voice/ros_stop_client.py clients/voice/ros_stop_worker.py clients/voice/local_commands.py clients/voice/voice_interface.py
+sudo systemctl restart jarvis-agents-voice.service
+journalctl -u jarvis-agents-voice.service -n 40 --no-pager
+```
+
+Look for `[LOCAL STOP] persistent ROS client ready`. If unavailable,
+verify ROS startup and `/jarvis/motion/stop` service availability. No
+Nav2/drive service restart is required. Test "Hey Jarvis", wait for
+"I'm here", then "Stop" **while disarmed**, followed by diagnostics upload.
+An active-goal test may follow only under normal supervision with the physical
+motor cutoff accessible. The new timing measures service dispatch/response
+after recognition, not the wake-word and speech-capture interval.
+
 ## Pi-local stop of active ROS goals
 
 Say "Hey Jarvis", wait for the local "I'm here" reply, then say "Stop".
 The exact utterances "stop moving" and "stop movement" are also recognized
 locally by Vosk. No Core connectivity or LLM call is required.
 
-The voice process calls /jarvis/motion/stop (std_srvs/Trigger), provided by
-the Nav2 frontier detector. It halts frontier exploration, requests cancellation
+The voice process uses a **persistent, prewarmed ROS Trigger client** to call
+`/jarvis/motion/stop`, provided by the Nav2 frontier detector. The voice
+virtualenv launches a single `/usr/bin/python3` ROS helper on startup after
+sourcing Jazzy and the workspace. Subsequent stop commands reuse the same
+client; they do not launch `ros2 service call` or wait for fresh ROS discovery.
+The helper does not accept arbitrary commands, and never arms motors.
+If the helper becomes unavailable, the voice command fails locally (and does
+not silently go to Core); a subsequent stop can try restarting it.
+The service reply is bounded to about 3 seconds once the client is warm.
+
+The diagnostics upload records `[LOCAL STOP] persistent ROS client ready`,
+`[LOCAL STOP] dispatching ROS stop`, and acknowledgement timing in
+milliseconds. An unsuccessful request logs the error and retains the physical
+cutoff fallback. It halts frontier exploration, requests cancellation
 of all goals on /navigate_to_pose, /follow_path, and /compute_path_to_pose,
 and requests the drive controller's /jarvis_drive/stop_goal service.
 These affect active Nav2 goals, regardless of whether their client was Core,
