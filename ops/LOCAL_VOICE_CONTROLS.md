@@ -10,6 +10,7 @@ WebSocket is disconnected. No model/Agent can issue these local actions.
 
 | Initial spoken utterance | Response | Required next utterance |
 | --- | --- | --- |
+| "Hey Jarvis, stop" | Cancels Nav2 movement goals locally, without disarming | none |
 | "Hey Jarvis, arm motors" | "Say confirm arm motors" | "Hey Jarvis, confirm arm motors" |
 | "Hey Jarvis, disarm motors" | disarms immediately | none |
 | "Hey Jarvis, reboot" | "Say confirm reboot" | "Hey Jarvis, confirm reboot" |
@@ -82,6 +83,68 @@ journalctl -u jarvis-agents-voice.service -n 30 --no-pager
 
 Look for `HARDWARE AVAILABLE, DISARMED` on the drive service and
 `[LOCAL] Offline Vosk command recognition enabled` on the voice service.
+
+## Pi-local stop of active ROS goals
+
+Say "Hey Jarvis", wait for the local "I'm here" reply, then say "Stop".
+The exact utterances "stop moving" and "stop movement" are also recognized
+locally by Vosk. No Core connectivity or LLM call is required.
+
+The voice process calls /jarvis/motion/stop (std_srvs/Trigger), provided by
+the Nav2 frontier detector. It halts frontier exploration, requests cancellation
+of all goals on /navigate_to_pose, /follow_path, and /compute_path_to_pose,
+and requests the drive controller's /jarvis_drive/stop_goal service.
+These affect active Nav2 goals, regardless of whether their client was Core,
+an RViz goal, or the exploration manager. The motor armed state remains unchanged.
+
+The drive controller stops motor output at once on receipt of its local stop
+request, and inhibits subsequent nonzero /cmd_vel messages until the command
+stream reports zero velocity for at least 0.75 seconds. If Nav2 keeps sending
+nonzero commands, the inhibit remains active. The stop reply "Stop requested."
+means the ROS stop request was dispatched, NOT that all cancellation results
+have arrived. Journals include VOICE_STOP_REQUESTED, VOICE_STOP_DRIVE_ACK,
+and VOICE_STOP_CANCEL_RESULT.
+
+This is not an emergency-stop mechanism. The wake word, "I'm here"
+acknowledgment, Vosk processing, ROS service calls, or an ongoing spoken reply
+can delay recognition. Keep the physical motor cutoff accessible.
+
+### Installation
+
+Park and disarm first. Check git status before pulling.
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m py_compile clients/voice/local_commands.py ops/nav2/frontier_detector.py body_services/picar/ros_drive_controller.py
+python3 -m unittest tests.test_voice_management
+sudo systemctl restart jarvis-drive@shadowfax.service
+sudo systemctl restart jarvis-nav2.service
+sudo systemctl restart jarvis-agents-voice.service
+```
+
+Core also needs the updated local-audio phrase allowlist deployed to Railway.
+Once live, synchronize the new two audio clips with the existing service:
+
+```bash
+sudo systemctl start jarvis-local-audio-sync.service
+sudo journalctl -u jarvis-local-audio-sync.service -n 40 --no-pager
+```
+
+A missing WAV clip prevents the audible confirmation, but not execution of
+the ROS stop command. First test with motors disarmed:
+
+```bash
+ros2 service call /jarvis/motion/stop std_srvs/srv/Trigger '{}'
+journalctl -u jarvis-nav2.service -n 70 --no-pager | grep VOICE_STOP
+journalctl -u jarvis-drive@shadowfax.service -n 40 --no-pager
+```
+
+Then try the spoken command while stationary. Only after validating service
+health and cancellation logs should you test stopping a supervised short motion.
+The drive service restart disarms the motors as usual; the stop command itself
+does not.
 
 ## Drive arming semantics
 
