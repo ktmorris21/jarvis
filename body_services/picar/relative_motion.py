@@ -73,7 +73,7 @@ def footprint_corridor_clear(grid, x, y, yaw, signed_distance):
                 cell = grid.data[gy*width + gx]
                 if cell < 0:
                     return False, "Requested corridor contains unknown space"
-                if cell >= 90:
+                if cell >= 65:
                     return False, "Obstacle or inflated collision zone in requested corridor"
     return True, "clear"
 
@@ -253,4 +253,7 @@ class RelativeMotion:
             self.node.get_logger().error("RELATIVE_MOTION_ABORT " + json.dumps(
                 {"motion_id": state["id"], "reason": reason}))
             # Internal safety cancellation; no new user-facing stop command.
-            state["handle"].cancel_goal_async()
+            try:
+                state["handle"].cancel_goal_async()
+            except Exception as exc:
+                self.node.get_logger().error("RELATIVE_MOTION_CANCEL_FAILED " + type(exc).__name__)
