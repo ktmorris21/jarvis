@@ -173,6 +173,60 @@ async def realtime_tool(request: Request, x_jarvis_token: str = Header(default="
         raise HTTPException(400, "Tool arguments must be an object")
     return await execute_tool(name, args)
 
+# Only these preapproved fixed responses may be synthesized for the offline Pi
+# cache. This endpoint cannot be used as a general-purpose paid TTS proxy.
+LOCAL_AUDIO_PHRASES = frozenset({
+    "Jarvis online and ready.",
+    "I'm here.",
+    "Confirm arm motors.",
+    "Confirm reboot.",
+    "Confirm power down.",
+    "Confirm update.",
+    "Motors armed.",
+    "Motors disarmed.",
+    "I couldn't arm the motors. Check the drive service.",
+    "Motor disarm failed. Use the physical power switch.",
+    "Rebooting.",
+    "Shutting down.",
+    "Power command failed.",
+    "Starting update.",
+    "Local command failed.",
+    "Uploading diagnostics.",
+    "Diagnostics uploaded.",
+    "Diagnostic upload failed.",
+})
+
+@app.get("/local-audio/manifest")
+async def local_audio_manifest(x_jarvis_token: str = Header(default="")):
+    if not settings.interface_token or settings.interface_token == "change-me" or x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    if settings.tts_provider != "elevenlabs" or not settings.elevenlabs_api_key:
+        raise HTTPException(503, "Core is not configured for ElevenLabs speech")
+    return {
+        "provider": settings.tts_provider,
+        "voice_id": settings.elevenlabs_voice_id,
+        "model": settings.elevenlabs_model,
+        "phrases": sorted(LOCAL_AUDIO_PHRASES),
+    }
+
+@app.post("/local-audio/render")
+async def local_audio_render(request: Request, x_jarvis_token: str = Header(default="")):
+    if not settings.interface_token or settings.interface_token == "change-me" or x_jarvis_token != settings.interface_token:
+        raise HTTPException(401, "Invalid token")
+    if settings.tts_provider != "elevenlabs" or not settings.elevenlabs_api_key:
+        raise HTTPException(503, "Core is not configured for ElevenLabs speech")
+    payload = await request.json()
+    phrase = payload.get("phrase") if isinstance(payload, dict) else None
+    if not isinstance(phrase, str) or phrase not in LOCAL_AUDIO_PHRASES:
+        raise HTTPException(400, "Unapproved local audio phrase")
+    from .audio import audio
+    try:
+        wav_base64 = await audio.synthesize_wav_base64(phrase)
+    except Exception:
+        logging.getLogger(__name__).exception("[LOCAL AUDIO] Synthesis failed")
+        raise HTTPException(502, "Local audio synthesis failed")
+    return {"phrase": phrase, "wav_base64": wav_base64}
+
 @app.post("/audio/utterance")
 async def audio_utterance(
     request: Request,
