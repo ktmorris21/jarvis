@@ -17,6 +17,21 @@ SERVICES = (
 )
 MAX_SECTION = 2200
 MAX_REPORT = 14500
+# ROS launch often embeds "[WARN]" and "[ERROR]" in journal INFO messages.
+# Match the message text rather than relying on systemd's severity field.
+# Include navigation failures sent by the bridge at INFO severity.
+JOURNAL_WINDOW = "-30 minutes"
+JOURNAL_MATCH = (
+    r"\[(?:WARN|WARNING|ERROR|FATAL)\]"
+    r"|\b(?:warn(?:ing)?|error|fatal|critical|exception|traceback)\b"
+    r"|nav_goal_(?:aborted|canceled)"
+    r"|(?:goal|navigation|planner|controller|transform|lifecycle).{0,35}"
+    r"(?:fail(?:ed|ure)?|abort(?:ed)?|reject(?:ed)?|timed out)"
+    r"|(?:fail(?:ed|ure)?|abort(?:ed)?|reject(?:ed)?|timed out).{0,35}"
+    r"(?:goal|navigation|planner|controller|transform|lifecycle)"
+    r"|RELATIVE_MOTION_ABORT|VOICE_STOP_(?:CANCEL_FAILED|DRIVE_FAILED)"
+    r"|motor_disarmed|drive_fault"
+)
 
 def clean(text):
     # Defense in depth: diagnostics should never intentionally include secrets.
@@ -46,8 +61,10 @@ def collect_sync():
         sections["service:" + service] = run(
             ["/usr/bin/systemctl", "is-active", service])
         sections["journal:" + service] = run([
-            "/usr/bin/journalctl", "-u", service, "-n", "18",
-            "--since", "-20 minutes", "--no-pager", "-o", "short-iso",
+            "/usr/bin/journalctl", "-u", service,
+            "--since", JOURNAL_WINDOW,
+            "--grep", JOURNAL_MATCH, "--case-sensitive=no",
+            "-n", "80", "--no-pager", "-o", "short-iso",
         ], timeout=6)
     report = {
         "report_id": report_id,
