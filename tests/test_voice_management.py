@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "clients" / "voice"))
-from local_commands import LocalCommands, normalize, PROMPTS, LOCAL_GRAMMAR, CLOSING_GRAMMAR, CLOSING_NORMALIZED
+from local_commands import LocalCommands, normalize, match_local_command, PROMPTS, LOCAL_GRAMMAR, CLOSING_GRAMMAR, CLOSING_NORMALIZED
 
 
 class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
@@ -34,6 +34,27 @@ class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
         await local.act(b"")
         self.assertEqual(await local.act(b""), (True, "Stop requested.", None))
         self.assertIsNone(local.pending)
+
+    async def test_stop_with_vosk_repeated_words_is_local(self):
+        for words in ("stop stop", "stop hey jarvis", "stop jarvis",
+                      "stop moving stop", "stop movement hey jarvis"):
+            with self.subTest(words=words):
+                local = self.make_local([words])
+                calls = []
+                async def request():
+                    calls.append("stop")
+                local._stop_ros_goals = request
+                self.assertEqual(await local.act(b""),
+                                 (True, "Stop requested.", None))
+                self.assertEqual(calls, ["stop"])
+
+    async def test_stop_does_not_match_unrelated_sentences(self):
+        for words in ("don't stop", "do not stop", "stop talking",
+                      "stop and go", "stop moving forward", "stop stop talking",
+                      "please stop", "stop hey jarvis continue",
+                      "hey jarvis don't stop"):
+            with self.subTest(words=words):
+                self.assertIsNone(match_local_command(normalize(words)))
 
     async def test_stop_failure_is_local(self):
         local = self.make_local(["stop"])
