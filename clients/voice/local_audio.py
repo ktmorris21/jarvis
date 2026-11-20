@@ -1,43 +1,47 @@
-"""Pre-rendered local control responses: no Piper startup on cache hit.
+"""Offline WAV responses, synchronized once from Core's selected ElevenLabs voice.
 
-Run `python clients/voice/local_audio.py generate` once on the Pi to build
-cached WAV files with the same Piper binary/model used by normal Jarvis TTS.
+No live speech generation is performed for local commands. The sync command
+fetches a fixed allowlist and validates every WAV before replacing cache files.
 """
+import argparse
 import asyncio
+import base64
 import hashlib
+import io
+import json
 import os
-import subprocess
 import sys
 import wave
 from pathlib import Path
+
+import httpx
 
 from local_commands import PROMPTS
 from boot_notice import BOOT_GREETING
 
 DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "cache" / "local_voice"
-DEFAULT_VOICE = "/home/shadowfax/jarvis/voices/en_GB-alan-medium.onnx"
-DEFAULT_PIPER = "/home/shadowfax/jarvis/.venv-voice/bin/piper"
+DEFAULT_CORE_URL = "https://jarvis-production-110e.up.railway.app"
 
-# Only these fixed phrases are cached. Unrecognized/dynamic text uses Piper.
 LOCAL_REPLIES = frozenset({
     BOOT_GREETING,
+    "I'm here.",
     *(pair[0] for pair in PROMPTS.values()),
     "Motors armed.",
     "Motors disarmed.",
     "I couldn't arm the motors. Check the drive service.",
     "Motor disarm failed. Use the physical power switch.",
-    "Rebooting Jarvis.",
-    "Powering down Jarvis.",
+    "Rebooting.",
+    "Shutting down.",
     "Power command failed.",
-    "Starting update. Voice may disconnect.",
+    "Starting update.",
     "Local command failed.",
-    "Diagnostic upload failed. Check the local voice logs.",
+    "Uploading diagnostics.",
+    "Diagnostics uploaded.",
+    "Diagnostic upload failed.",
 })
-
 
 def cache_dir():
     return Path(os.environ.get("JARVIS_LOCAL_AUDIO_CACHE", str(DEFAULT_CACHE)))
-
 
 def cache_file(text):
     if text not in LOCAL_REPLIES:
@@ -45,61 +49,83 @@ def cache_file(text):
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return cache_dir() / (digest + ".wav")
 
+def wav_is_valid_bytes(data):
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            frames, rate = wav.getnframes(), wav.getframerate()
+            return (frames > 0 and frames / rate <= 30
+                    and rate == 16000 and wav.getnchannels() == 1
+                    and wav.getsampwidth() == 2)
+    except (OSError, EOFError, wave.Error, ValueError, ZeroDivisionError):
+        return False
 
 def valid_wav(path):
     try:
-        if not path.is_file() or path.stat().st_size < 100:
-            return False
-        with wave.open(str(path), "rb") as wav:
-            return wav.getnframes() > 0 and wav.getnchannels() >= 1
-    except (OSError, EOFError, wave.Error):
+        return path.is_file() and wav_is_valid_bytes(path.read_bytes())
+    except OSError:
         return False
 
-
-def generate():
-    voice = os.environ.get("JARVIS_PIPER_VOICE", DEFAULT_VOICE)
-    binary = os.environ.get("JARVIS_PIPER_BIN", DEFAULT_PIPER)
-    if not Path(voice).is_file() or not Path(voice + ".json").is_file():
-        raise FileNotFoundError("Piper voice model/config missing: " + voice)
-    if not Path(binary).is_file():
-        raise FileNotFoundError("Piper binary missing: " + binary)
-    cache_dir().mkdir(parents=True, exist_ok=True)
-    for text in sorted(LOCAL_REPLIES):
-        path = cache_file(text)
-        temp = path.with_suffix(".tmp.wav")
+def sync(*, url, token):
+    if not token:
+        raise RuntimeError("JARVIS_INTERFACE_TOKEN is required for sync")
+    base = url.rstrip("/")
+    headers = {"X-Jarvis-Token": token}
+    # Make all network calls before installing any new clip. Never replace the
+    # working cache with a partially downloaded or mismatched voice pack.
+    with httpx.Client(timeout=65) as client:
+        response = client.get(base + "/local-audio/manifest", headers=headers)
+        response.raise_for_status()
+        manifest = response.json()
+        if manifest.get("provider") != "elevenlabs" or set(manifest.get("phrases", [])) != LOCAL_REPLIES:
+            raise RuntimeError("Core's selected provider or phrase manifest does not match Pi")
+        downloads = {}
+        for phrase in sorted(LOCAL_REPLIES):
+            response = client.post(base + "/local-audio/render",
+                                   json={"phrase": phrase}, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("phrase") != phrase:
+                raise RuntimeError("Mismatched rendered phrase")
+            data = base64.b64decode(payload["wav_base64"], validate=True)
+            if len(data) > 1_500_000 or not wav_is_valid_bytes(data):
+                raise RuntimeError("Invalid or oversized WAV for " + repr(phrase))
+            downloads[phrase] = data
+            print("[LOCAL AUDIO] Downloaded " + repr(phrase), flush=True)
+    target = cache_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    for phrase, data in downloads.items():
+        path = cache_file(phrase)
+        temp = path.with_suffix(".tmp")
         try:
-            result = subprocess.run(
-                [binary, "--model", voice, "--output_file", str(temp)],
-                input=text + "\n", text=True, capture_output=True, timeout=120,
-                check=False,
-            )
-            if result.returncode != 0 or not valid_wav(temp):
-                raise RuntimeError(
-                    f"Piper failed for {text!r}: {result.stderr[-500:]}"
-                )
-            temp.replace(path)  # atomic replacement on the same filesystem
-            print(f"[LOCAL AUDIO] Cached {text!r}: {path}", flush=True)
+            temp.write_bytes(data)
+            temp.replace(path)
         finally:
             temp.unlink(missing_ok=True)
+    metadata = {key: manifest[key] for key in ("provider", "voice_id", "model")}
+    metadata["phrases"] = sorted(LOCAL_REPLIES)
+    temp = target / "manifest.tmp"
+    temp.write_text(json.dumps(metadata, indent=2) + "\n")
+    temp.replace(target / "manifest.json")
+    print("[LOCAL AUDIO] Synced " + str(len(downloads)) +
+          " phrases; voice " + str(metadata["voice_id"]), flush=True)
 
-
-async def play_local_response(text, *, device, fallback):
-    """Play a cached response; fall back to existing async Piper playback."""
+async def play_local_response(text, *, device, fallback=None):
+    """Play an approved local WAV. No live TTS fallback for local controls."""
     path = cache_file(text)
-    if path is not None and valid_wav(path):
-        player = await asyncio.create_subprocess_exec(
-            "aplay", "-q", "-D", device, str(path)
-        )
-        if await player.wait() == 0:
-            print(f"[LOCAL AUDIO] Cache hit: {text!r}", flush=True)
-            return
-        print(f"[LOCAL AUDIO] Cached playback failed: {text!r}", flush=True)
-    else:
-        print(f"[LOCAL AUDIO] Cache miss: {text!r}", flush=True)
-    await fallback(text)
+    if path is None or not valid_wav(path):
+        raise FileNotFoundError("Missing synchronized local voice clip: " + repr(text))
+    player = await asyncio.create_subprocess_exec("aplay", "-q", "-D", device, str(path))
+    if await player.wait():
+        raise RuntimeError("Local WAV playback failed: " + repr(text))
+    print("[LOCAL AUDIO] Cache hit: " + repr(text), flush=True)
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=["sync"])
+    parser.add_argument("--url", default=os.environ.get("JARVIS_CORE_URL", DEFAULT_CORE_URL))
+    parser.add_argument("--token", default=os.environ.get("JARVIS_INTERFACE_TOKEN"))
+    args = parser.parse_args()
+    sync(url=args.url, token=args.token)
 
 if __name__ == "__main__":
-    if sys.argv[1:] != ["generate"]:
-        raise SystemExit("Usage: python clients/voice/local_audio.py generate")
-    generate()
+    main()
