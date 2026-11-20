@@ -43,7 +43,7 @@ AGENT_TOOL_NAMES = frozenset({
 
 
 def baseline_context(*, robot_status_context: dict | None = None) -> str:
-    """Compose the per-turn identity, goals, and authoritative world snapshot."""
+    """Compose identity, operational rules, goals and Core state without live telemetry."""
     goals = repository.goals("active")[:settings.context_goal_limit]
     snapshot = {
         "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -57,10 +57,6 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
             for g in goals
         ],
         "active_identity_profile": current_identity_profile(),
-        "robot_status": robot_status_context or {
-            "available": False,
-            "reason": "Current ROS status unavailable",
-        },
     }
     guidance = Path(__file__).with_name("operational_instructions.md").read_text(
         encoding="utf-8"
@@ -71,9 +67,49 @@ def baseline_context(*, robot_status_context: dict | None = None) -> str:
         identity_instructions()
         + "\n\n"
         + guidance
-        + "\n\nCurrent world snapshot:\n"
+        + "\n\nCurrent Core context:\n"
         + json.dumps(snapshot, default=str)
     )
+
+
+def current_turn_status_text(robot_status_context: dict | None) -> str:
+    """Fresh per-turn data for the model, never the persisted SDK user message."""
+    status = robot_status_context or {
+        "available": False,
+        "reason": "Current ROS status unavailable",
+    }
+    return (
+        "CURRENT-TURN ROBOT TELEMETRY (system-provided, not user-authored):\\n"
+        "This is the status fetched for the current user request. When individual "
+        "readings are valid and fresh, they supersede old conversation claims "
+        "about present robot state. Do not present old measurements as current.\\n"
+        + json.dumps(status, default=str)
+    )
+
+
+def make_current_turn_status_filter(robot_status_context: dict | None):
+    """Insert ephemeral telemetry next to this turn's user input, after history merge."""
+    from agents.run import ModelInputData
+
+    telemetry = current_turn_status_text(robot_status_context)
+
+    def add_telemetry(data):
+        items = list(data.model_data.input)
+        message = {"role": "user", "content": telemetry}
+        # The hook also runs for tool continuations. Keep the inserted message
+        # after the original request, before subsequent tool outputs.
+        last_user = next(
+            (i for i in range(len(items) - 1, -1, -1)
+             if isinstance(items[i], dict) and items[i].get("role") == "user"),
+            None,
+        )
+        if last_user is None:
+            items.append(message)
+        else:
+            items.insert(last_user + 1, message)
+        return ModelInputData(input=items, instructions=data.model_data.instructions)
+
+    return add_telemetry
 
 
 def deliver_status_result(event_data: dict) -> None:
@@ -272,7 +308,7 @@ async def _clear_previous_agent_history_once() -> None:
 
 async def agent_reply(text: str) -> str:
     """Run a bounded agent turn; caller owns speech output; no fallback cognition."""
-    from agents import Agent, Runner, FunctionTool, ModelSettings, RunHooks
+    from agents import Agent, Runner, FunctionTool, ModelSettings, RunHooks, RunConfig
     from openai.types.shared import Reasoning
 
     class ModelTimingHooks(RunHooks):
@@ -376,7 +412,7 @@ async def agent_reply(text: str) -> str:
         agent = Agent(
             name="Jarvis",
             model=settings.agent_model,
-            instructions=baseline_context(robot_status_context=robot_status_context),
+            instructions=baseline_context(),
             tools=[make_tool(spec) for spec in tool_schemas()
                    if spec["name"] in AGENT_TOOL_NAMES],
             model_settings=ModelSettings(
@@ -387,6 +423,8 @@ async def agent_reply(text: str) -> str:
         try:
             result = await asyncio.wait_for(
                 Runner.run(agent, text, session=_session_instance(), hooks=hooks,
+                           run_config=RunConfig(call_model_input_filter=
+                               make_current_turn_status_filter(robot_status_context)),
                            max_turns=settings.agent_max_turns),
                 timeout=settings.agent_timeout_seconds,
             )
