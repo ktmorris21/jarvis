@@ -21,9 +21,9 @@ class DiagnosticsTests(unittest.TestCase):
         with patch.object(diagnostics, "run", side_effect=fake_run):
             report = diagnostics.collect_sync()
         self.assertEqual(len(report["report_id"]), 12)
-        self.assertEqual(len(report["sections"]), 4 + len(diagnostics.SERVICES)*2 + 1)
+        self.assertEqual(len(report["sections"]), 4 + len(diagnostics.SERVICES)*2 + 3)
         journals = [cmd for cmd in commands if cmd[0] == "/usr/bin/journalctl"]
-        self.assertEqual(len(journals), len(diagnostics.SERVICES) + 2)
+        self.assertEqual(len(journals), len(diagnostics.SERVICES) + 4)
         for command in journals:
             self.assertEqual(command[command.index("--since") + 1], "-30 minutes")
             self.assertIn("--grep", command)
@@ -32,6 +32,13 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("nav_goal_(aborted|canceled)",
                       " ".join(journals[-2]))
         self.assertIn("journal:nav_goal_failures", report["sections"])
+        self.assertIn("journal:voice_stop", report["sections"])
+        self.assertIn("journal:ros_stop", report["sections"])
+        voice = next(cmd for cmd in journals
+                     if "jarvis-agents-voice.service" in cmd)
+        self.assertIn("Stop request failed", " ".join(voice))
+        self.assertIn("operator stop goal", " ".join(journals))
+
 
     def test_redacts_credentials_and_bounds_sections(self):
         data = "bearer private123 token=mytoken password:xyz api_key=something"
