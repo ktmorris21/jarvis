@@ -128,6 +128,25 @@ def collect_sync():
             "--grep", JOURNAL_MATCH, "--case-sensitive=no",
             "-n", "80", "--no-pager", "-o", "short-iso",
         ], timeout=6)
+    # Diagnose the Pi-local voice stop route, which bypasses Railway entirely.
+    # Match only explicit stop/wake/control outcome messages. Never upload
+    # ordinary conversations, unrestricted STT text, or microphone data.
+    sections["journal:voice_stop"] = run([
+        "/usr/bin/journalctl", "-u", "jarvis-agents-voice.service",
+        "--since", JOURNAL_WINDOW,
+        "--grep", r"\[LOCAL\].*(?:stop|[Ss]top request failed|Grammar transcript='(?:stop|stop moving|stop movement)')"
+                  r"|\[WAKE\] Acknowledged|Stop command failed",
+        "--case-sensitive=no",
+        "-n", "35", "--no-pager", "-o", "short-iso",
+    ], timeout=6)
+    sections["journal:ros_stop"] = run([
+        "/usr/bin/journalctl", "-u", "jarvis-nav2.service",
+        "-u", "jarvis-drive@shadowfax.service",
+        "--since", JOURNAL_WINDOW,
+        "--grep", r"VOICE_STOP_|GOAL STOP INHIBIT|operator stop goal",
+        "--case-sensitive=no",
+        "-n", "35", "--no-pager", "-o", "short-iso",
+    ], timeout=6)
     # Separate bounded navigation-failure history so a flood of warning
     # messages cannot evict the particular failed goal being investigated.
     sections["journal:nav_goal_failures"] = run([
