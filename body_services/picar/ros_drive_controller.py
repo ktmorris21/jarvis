@@ -20,7 +20,7 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 from std_msgs.msg import String
 import json
 from datetime import datetime, timezone
@@ -69,6 +69,7 @@ class RosDriveController(Node):
         self.diag_publisher = self.create_publisher(String, "/jarvis/diagnostics/events", 20)
         self.create_subscription(Twist, "/cmd_vel", self.on_command, 10)
         self.create_service(SetBool, "/jarvis_drive/set_armed", self.set_armed)
+        self.create_service(Trigger, "/jarvis_drive/status", self.get_status)
         self.create_timer(0.05, self.on_watchdog)
 
     def diagnostic(self, kind, reason, **extra):
@@ -94,6 +95,13 @@ class RosDriveController(Node):
         self.stop(reason)
         self.get_logger().warning("DISARMED: " + reason)
         self.diagnostic("motor_disarmed", reason)
+
+    def get_status(self, request, response):
+        """Read-only, fail-closed arm state for authenticated relative moves."""
+        response.success = True
+        response.message = json.dumps({"armed": self.armed,
+                                       "hardware_enabled": self.hw is not None})
+        return response
 
     def set_armed(self, request, response):
         if not request.data:
