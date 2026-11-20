@@ -9,7 +9,10 @@
         <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
                            error_code_id="{compute_path_error_code}"/>
       </RateController>
+      <!-- Specify the original checker explicitly: Nav2 cannot infer which
+           checker to use once relative_goal_checker is also configured. -->
       <FollowPath path="{path}" controller_id="FollowPath"
+                  goal_checker_id="goal_checker"
                   error_code_id="{follow_path_error_code}"/>
     </PipelineSequence>
   </BehaviorTree>
