@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "clients" / "voice"))
-from local_commands import LocalCommands, normalize, PROMPTS, LOCAL_GRAMMAR
+from local_commands import LocalCommands, normalize, PROMPTS, LOCAL_GRAMMAR, CLOSING_GRAMMAR, CLOSING_NORMALIZED
 
 
 class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
@@ -38,6 +38,17 @@ class LocalManagementCommandsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(handled)
         self.assertIsNone(deferred)
         self.assertIsNone(local.pending)
+
+    async def test_nevermind_silently_closes_followup(self):
+        for phrase in ("nevermind", "never mind"):
+            local = self.make_local([phrase])
+            self.assertTrue(await local.is_closing_phrase(b""))
+            self.assertIn(phrase, CLOSING_GRAMMAR)
+            self.assertIn(phrase, CLOSING_NORMALIZED)
+
+    async def test_nevermind_with_extra_words_does_not_close(self):
+        local = self.make_local(["never mind the navigation", "never mind the navigation"])
+        self.assertFalse(await local.is_closing_phrase(b""))
 
     def test_grammar_contains_management_commands(self):
         for phrase in ("update jarvis", "confirm update jarvis",
