@@ -15,6 +15,7 @@ from action_msgs.msg import GoalStatus
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import qos_profile_sensor_data
 from std_srvs.srv import Trigger
+from action_msgs.srv import CancelGoal
 from rclpy.action import ActionClient
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformListener
@@ -62,6 +63,13 @@ class FrontierDetector(Node):
         self.create_subscription(LaserScan, "/scan_lower", lambda msg: self.on_scan("lower"), qos_profile_sensor_data)
         self.create_service(Trigger, "/jarvis/exploration/start", self.start_exploration)
         self.create_service(Trigger, "/jarvis/exploration/stop", self.stop_exploration)
+        self.create_service(Trigger, "/jarvis/motion/stop", self.stop_all_motion)
+        self._stop_drive_client = self.create_client(Trigger, "/jarvis_drive/stop_goal")
+        self._cancel_clients = {
+            action: self.create_client(CancelGoal, action + "/_action/cancel_goal")
+            for action in ("/navigate_to_pose", "/follow_path", "/compute_path_to_pose")
+        }
+        self._stop_generation = 0
         self.create_service(Trigger, "/jarvis/exploration/status", self.exploration_status)
         self.create_timer(0.25, self.check_exploration_health)
         self.declare_parameter("planning_interval_seconds", 20.0)
@@ -131,6 +139,71 @@ class FrontierDetector(Node):
         self.get_logger().warning("EXPLORATION STARTED by explicit ROS service command")
         self.diagnostic("exploration_started", "operator request")
         return response
+
+    def stop_all_motion(self, request, response):
+        """Pi-local ROS goal stop: abort exploration and cancel all Nav2 actions.
+
+        Never disarms. Cancellation is asynchronous; the drive controller
+        immediately suppresses motor output until the command stream is quiet.
+        """
+        # Require the drive stop gate and both moving-action cancellation
+        # services before accepting the stop request. Missing any is a failure,
+        # not a false success message to the operator.
+        required = ("/navigate_to_pose", "/follow_path")
+        available = (self._stop_drive_client.service_is_ready()
+                     and all(self._cancel_clients[a].service_is_ready() for a in required))
+        self._stop_generation += 1
+        generation = self._stop_generation
+        self.halt_exploration("Stopped by Pi-local voice command")
+        if self._stop_drive_client.service_is_ready():
+            try:
+                fut = self._stop_drive_client.call_async(Trigger.Request())
+                fut.add_done_callback(lambda f: self.on_stop_drive_response(f, generation))
+            except Exception as exc:
+                self.get_logger().error("VOICE_STOP_DRIVE_ERROR " + type(exc).__name__)
+                available = False
+        else:
+            self.get_logger().error("VOICE_STOP_DRIVE_UNAVAILABLE")
+        for action, client in self._cancel_clients.items():
+            if not client.service_is_ready():
+                self.get_logger().warning("VOICE_STOP_CANCEL_UNAVAILABLE " + action)
+                continue
+            try:
+                # All-zero goal UUID and timestamp = cancel ALL goals on this
+                # server, including goals from RViz, Core, or another client.
+                future = client.call_async(CancelGoal.Request())
+                future.add_done_callback(
+                    lambda f, name=action, gen=generation: self.on_stop_cancel_response(f, name, gen))
+            except Exception as exc:
+                self.get_logger().error("VOICE_STOP_CANCEL_ERROR " + action + " " + type(exc).__name__)
+                if action in required:
+                    available = False
+        response.success = bool(available)
+        response.message = ("Drive stop and Nav2 goal cancellation requested; motor arm unchanged. "
+                            "Cancellation is pending confirmation."
+                            if available else
+                            "Stop incomplete: some local ROS controls unavailable. Use physical motor cutoff if moving.")
+        self.get_logger().warning("VOICE_STOP_REQUESTED success=" + str(response.success))
+        self.diagnostic("voice_stop_requested", response.message)
+        return response
+
+    def on_stop_drive_response(self, future, generation):
+        try:
+            result = future.result()
+            if not result.success:
+                raise RuntimeError(result.message)
+            self.get_logger().warning("VOICE_STOP_DRIVE_ACK generation=" + str(generation))
+        except Exception as exc:
+            self.get_logger().error("VOICE_STOP_DRIVE_FAILED " + type(exc).__name__)
+
+    def on_stop_cancel_response(self, future, action, generation):
+        try:
+            result = future.result()
+            self.get_logger().warning(
+                "VOICE_STOP_CANCEL_RESULT action=%s generation=%s code=%s goals=%s" %
+                (action, generation, result.return_code, len(result.goals_canceling)))
+        except Exception as exc:
+            self.get_logger().error("VOICE_STOP_CANCEL_FAILED " + action + " " + type(exc).__name__)
 
     def stop_exploration(self, request, response):
         self.halt_exploration("Stopped by operator")
