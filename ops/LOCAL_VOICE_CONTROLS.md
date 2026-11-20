@@ -84,6 +84,31 @@ journalctl -u jarvis-agents-voice.service -n 30 --no-pager
 Look for `HARDWARE AVAILABLE, DISARMED` on the drive service and
 `[LOCAL] Offline Vosk command recognition enabled` on the voice service.
 
+## Vosk repeated-stop recognition fix
+
+Moving-goal diagnostics confirmed Vosk produced `stop hey jarvis` and
+`stop stop`, neither of which matched the original strict one-phrase table.
+The local stop matching now accepts those limited forms (and a repeated
+`stop` or trailing `jarvis` after `stop moving`/`stop movement`). It
+continues to reject unrelated instructions or negated stop requests;
+arming, disarming, and power commands retain exact matching.
+
+The persistent ROS client and Nav2 cancellation code are unchanged. Deploy
+the recognition update with the voice service only, **motors disarmed**:
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m unittest discover -s tests -p 'test_voice_management.py'
+python3 -m unittest discover -s tests -p 'test_ros_stop_client.py'
+sudo systemctl restart jarvis-agents-voice.service
+```
+
+On the next stop test, the voice journal should record both a grammar
+transcript and `[LOCAL STOP] dispatching ROS stop`. Try the stationary
+disarmed test before attempting supervised moving navigation.
+
 ## Persistent stop client rollout (November 2026)
 
 When voice `stop` was tested during active navigation, Vosk recognized
