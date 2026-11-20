@@ -688,6 +688,12 @@ async def main(args):
     model = Model(wakeword_models=["hey jarvis"], inference_framework="onnx")
     local = LocalCommands()
     head = HeadExpressions()
+    # Warm the ROS service client once; local command failures must not
+    # prevent ordinary wake-word operation.
+    try:
+        await local.start_stop_client()
+    except Exception as exc:
+        print("[LOCAL STOP] startup unavailable:", repr(exc), flush=True)
     await head.start()
     await speak_boot_announcement(head)
     response_finished = asyncio.Event()
@@ -702,6 +708,7 @@ async def main(args):
         socket_task.cancel()
         await asyncio.gather(socket_task, return_exceptions=True)
         await head.close()
+        await local.close()
 
 
 if __name__ == "__main__":
