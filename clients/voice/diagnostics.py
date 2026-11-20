@@ -135,7 +135,7 @@ def collect_sync():
         "/usr/bin/journalctl", "-u", "jarvis-agents-voice.service",
         "--since", JOURNAL_WINDOW,
         "--grep", r"\[LOCAL\].*(?:stop|[Ss]top request failed|Grammar transcript='(?:stop|stop moving|stop movement)')"
-                  r"|\[WAKE\] Acknowledged|Stop command failed",
+                  r"|\[LOCAL STOP\]|\[WAKE\] Acknowledged|Stop command failed",
         "--case-sensitive=no",
         "-n", "35", "--no-pager", "-o", "short-iso",
     ], timeout=6)
