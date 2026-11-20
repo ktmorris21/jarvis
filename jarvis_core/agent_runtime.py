@@ -79,10 +79,10 @@ def current_turn_status_text(robot_status_context: dict | None) -> str:
         "reason": "Current ROS status unavailable",
     }
     return (
-        "CURRENT-TURN ROBOT TELEMETRY (system-provided, not user-authored):\\n"
+        "CURRENT-TURN ROBOT TELEMETRY (system-provided, not user-authored):\n"
         "This is the status fetched for the current user request. When individual "
         "readings are valid and fresh, they supersede old conversation claims "
-        "about present robot state. Do not present old measurements as current.\\n"
+        "about present robot state. Do not present old measurements as current.\n"
         + json.dumps(status, default=str)
     )
 
@@ -96,6 +96,8 @@ def make_current_turn_status_filter(robot_status_context: dict | None):
     def add_telemetry(data):
         items = list(data.model_data.input)
         message = {"role": "user", "content": telemetry}
+        if any(isinstance(item, dict) and item == message for item in items):
+            return ModelInputData(input=items, instructions=data.model_data.instructions)
         # The hook also runs for tool continuations. Keep the inserted message
         # after the original request, before subsequent tool outputs.
         last_user = next(
