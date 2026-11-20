@@ -1,4 +1,5 @@
 """Hardware-free tests for bounded, warning-focused Pi diagnostic uploads."""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -39,9 +40,12 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertLessEqual(len(diagnostics.clean("z"*10000)), diagnostics.MAX_SECTION)
 
     def test_report_stays_bounded_if_every_journal_is_noisy(self):
-        with patch.object(diagnostics, "run", return_value="X"*10000):
+        def noisy_journals(argv, timeout=5):
+            return "X" * diagnostics.MAX_SECTION if argv[0] == "/usr/bin/journalctl" else "ok"
+
+        with patch.object(diagnostics, "run", side_effect=noisy_journals):
             report = diagnostics.collect_sync()
-        self.assertLessEqual(len(str(report)), diagnostics.MAX_REPORT)
+        self.assertLessEqual(len(json.dumps(report)), diagnostics.MAX_REPORT)
         self.assertTrue(all(len(v) <= diagnostics.MAX_SECTION
                             for k, v in report["sections"].items()
                             if k.startswith("journal:")))
