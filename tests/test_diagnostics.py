@@ -39,6 +39,21 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertNotIn(secret, cleaned)
         self.assertLessEqual(len(diagnostics.clean("z"*10000)), diagnostics.MAX_SECTION)
 
+    def test_newest_first_journal_truncation_keeps_recent_error(self):
+        # journalctl --grep with -n produces reverse chronological output.
+        recent = "2026-11-19 21:22:38 [ERROR] Nav2 controller failure\n"
+        older = "2026-11-19 21:02:50 [WARN] old warning\n"
+        output = recent + older * 200
+        with patch.object(diagnostics.subprocess, "run") as fake:
+            fake.return_value.stdout = output
+            fake.return_value.stderr = ""
+            fake.return_value.returncode = 0
+            collected = diagnostics.run(["/usr/bin/journalctl", "--grep", "error", "-n", "80"])
+        self.assertTrue(collected.startswith(recent))
+        self.assertNotIn("21:02:50", collected[-20:])
+        self.assertLessEqual(len(collected), diagnostics.MAX_SECTION)
+        self.assertNotIn(recent, diagnostics.clean(output))
+
     def test_report_stays_bounded_if_every_journal_is_noisy(self):
         def noisy_journals(argv, timeout=5):
             return "X" * diagnostics.MAX_SECTION if argv[0] == "/usr/bin/journalctl" else "ok"
