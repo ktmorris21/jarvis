@@ -36,7 +36,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("journal:ros_stop", report["sections"])
         voice = next(cmd for cmd in journals
                      if "jarvis-agents-voice.service" in cmd)
-        self.assertIn("Stop request failed", " ".join(voice))
+        self.assertIn("Stop command failed", " ".join(voice))
         self.assertIn("operator stop goal", " ".join(" ".join(cmd) for cmd in journals))
 
 
