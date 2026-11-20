@@ -2,6 +2,10 @@
 import math
 import pytest
 
+pytest.importorskip("rclpy")
+pytest.importorskip("nav2_msgs")
+pytest.importorskip("tf2_ros")
+
 from body_services.picar.relative_motion import validate_move, footprint_corridor_clear
 
 
