@@ -1,0 +1,16 @@
+[Unit]
+Description=Jarvis one-shot sync of fixed local WAV phrases from Core voice
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=shadowfax
+Group=shadowfax
+WorkingDirectory=/home/shadowfax/jarvis
+Environment=HOME=/home/shadowfax
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/jarvis/voice.env
+ExecStart=/home/shadowfax/jarvis/.venv-voice/bin/python3 /home/shadowfax/jarvis/clients/voice/local_audio.py sync
+TimeoutStartSec=1200
+RemainAfterExit=no
