@@ -27,6 +27,9 @@ def normalize(utterance):
     return re.sub(r"\s+(?:please)$", "", text).strip()
 
 COMMANDS = {
+    "stop": "stop",
+    "stop moving": "stop",
+    "stop movement": "stop",
     "arm motors": "arm",
     "arm the motors": "arm",
     "disarm motors": "disarm",
@@ -171,6 +174,16 @@ class LocalCommands:
         ]
         return await self._run(args, timeout=12)
 
+    async def _stop_ros_goals(self):
+        # Fixed local ROS service; no cloud call, model tool or arbitrary input.
+        args = [
+            "/bin/bash", "-c",
+            "source /opt/ros/jazzy/setup.bash && "
+            "source /home/shadowfax/ros2_ws/install/setup.bash && "
+            'exec ros2 service call /jarvis/motion/stop std_srvs/srv/Trigger "{}"',
+        ]
+        return await self._run(args, timeout=8)
+
     async def _run(self, argv, timeout=12):
         proc = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -186,6 +199,9 @@ class LocalCommands:
         return output
 
     async def _execute(self, action):
+        if action == "stop":
+            await self._stop_ros_goals()
+            return "Stop requested."
         if action in ("arm", "disarm"):
             await self._ros_armed(action == "arm")
             return "Motors armed." if action == "arm" else "Motors disarmed."
@@ -230,6 +246,12 @@ class LocalCommands:
             return False, None, None
         if action == "diagnostics":
             return True, await self._execute(action), "diagnostics"
+        if action == "stop":
+            try:
+                return True, await self._execute(action), None
+            except Exception as exc:
+                print("[LOCAL] Stop request failed:", repr(exc), flush=True)
+                return True, "Stop command failed. Use the physical power switch.", None
         if action == "disarm":
             try:
                 return True, await self._execute(action), None
