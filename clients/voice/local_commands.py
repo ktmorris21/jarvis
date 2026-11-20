@@ -44,10 +44,10 @@ COMMANDS = {
     "pull latest code": "update",
 }
 PROMPTS = {
-    "arm": ("Say confirm arm motors.", "confirm arm motors"),
-    "reboot": ("Say confirm reboot.", "confirm reboot"),
-    "poweroff": ("Say confirm power down.", "confirm power down"),
-    "update": ("Say confirm update Jarvis.", "confirm update jarvis"),
+    "arm": ("Confirm arm motors.", "confirm arm motors"),
+    "reboot": ("Confirm reboot.", "confirm reboot"),
+    "poweroff": ("Confirm power down.", "confirm power down"),
+    "update": ("Confirm update.", "confirm update jarvis"),
 }
 # Disarm is intentionally a single utterance for rapid operator control.
 
@@ -190,10 +190,10 @@ class LocalCommands:
         if action == "diagnostics":
             return "Uploading diagnostics."
         if action == "update":
-            return "Starting update. Voice may disconnect."
+            return "Starting update."
         if action in ("reboot", "poweroff"):
             # Arrange the operation after the acknowledgement is played.
-            return "Rebooting Jarvis." if action == "reboot" else "Powering down Jarvis."
+            return "Rebooting." if action == "reboot" else "Shutting down."
         raise ValueError("Unexpected local command")
 
     async def act(self, audio):
