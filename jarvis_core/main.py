@@ -182,6 +182,8 @@ LOCAL_AUDIO_PHRASES = frozenset({
     "Confirm reboot.",
     "Confirm power down.",
     "Confirm update.",
+    "Stop requested.",
+    "Stop command failed. Use the physical power switch.",
     "Motors armed.",
     "Motors disarmed.",
     "I couldn't arm the motors. Check the drive service.",
