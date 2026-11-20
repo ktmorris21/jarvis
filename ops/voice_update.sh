@@ -19,6 +19,9 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
   echo "[UPDATE] Refusing: dirty working tree"
   exit 1
 fi
+# Fail before changing the checked-out code if restart permissions are absent.
+sudo -n -l /usr/bin/systemctl restart jarvis-bridge@shadowfax.service >/dev/null
+sudo -n -l /usr/bin/systemctl restart jarvis-agents-voice.service >/dev/null
 before=$(git rev-parse HEAD)
 git fetch --quiet origin main
 # Never rewind or merge divergent histories.
@@ -33,9 +36,6 @@ if [[ "$after" == "$before" ]]; then
   echo "[UPDATE] Already up to date"
   exit 0
 fi
-# Fail before changing running services if required permissions are absent.
-sudo -n -l /usr/bin/systemctl restart jarvis-bridge@shadowfax.service >/dev/null
-sudo -n -l /usr/bin/systemctl restart jarvis-agents-voice.service >/dev/null
 echo "[UPDATE] Restarting ROS bridge, then voice"
 sudo -n /usr/bin/systemctl restart jarvis-bridge@shadowfax.service
 sudo -n /usr/bin/systemctl restart jarvis-agents-voice.service
