@@ -34,19 +34,21 @@ JOURNAL_MATCH = (
     r"|motor_disarmed|drive_fault"
 )
 
-def clean(text):
+def clean(text, *, newest_first=False):
     # Defense in depth: diagnostics should never intentionally include secrets.
     text = re.sub(r"(?i)(bearer\s+)[^\s]+", r"\1[REDACTED]", text)
     text = re.sub(r"(?i)((?:token|password|api_key|secret)\s*[=:]\s*)[^\s,]+",
                   r"\1[REDACTED]", text)
-    return text[-MAX_SECTION:]
+    # journalctl --grep with -n implicitly returns newest FIRST. Preserve the
+    # most recent evidence; truncating from the end loses the actual failure.
+    return text[:MAX_SECTION] if newest_first else text[-MAX_SECTION:]
 
 def run(argv, timeout=5):
     try:
         result = subprocess.run(argv, capture_output=True, text=True,
                                 timeout=timeout, check=False)
         output = (result.stdout or "") + (result.stderr or "")
-        return clean(output or "(no output)") + (f" [exit={result.returncode}]" if result.returncode else "")
+        return clean(output or "(no output)", newest_first="--grep" in argv) + (f" [exit={result.returncode}]" if result.returncode else "")
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f"unavailable: {type(exc).__name__}"
 
@@ -87,7 +89,7 @@ def collect_sync():
             for key, val in sections.items()):
         key = max((key for key in sections if key.startswith("journal:")),
                   key=lambda k: len(sections[k]))
-        sections[key] = sections[key][-max(200, len(sections[key]) // 2):]
+        sections[key] = sections[key][:max(200, len(sections[key]) // 2)]
     return report
 
 async def collect_diagnostics():
