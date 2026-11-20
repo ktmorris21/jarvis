@@ -98,9 +98,8 @@ These affect active Nav2 goals, regardless of whether their client was Core,
 an RViz goal, or the exploration manager. The motor armed state remains unchanged.
 
 The drive controller stops motor output at once on receipt of its local stop
-request, and inhibits subsequent nonzero /cmd_vel messages until the command
-stream reports zero velocity for at least 0.75 seconds. If Nav2 keeps sending
-nonzero commands, the inhibit remains active. The stop reply "Stop requested."
+request, and inhibits subsequent nonzero /cmd_vel messages until at least one second has passed without nonzero velocity commands.
+If Nav2 keeps sending nonzero commands, the inhibit remains active. The stop reply "Stop requested."
 means the ROS stop request was dispatched, NOT that all cancellation results
 have arrived. Journals include VOICE_STOP_REQUESTED, VOICE_STOP_DRIVE_ACK,
 and VOICE_STOP_CANCEL_RESULT.
@@ -118,7 +117,7 @@ cd ~/jarvis
 git status --short
 git pull --ff-only
 python3 -m py_compile clients/voice/local_commands.py ops/nav2/frontier_detector.py body_services/picar/ros_drive_controller.py
-python3 -m unittest tests.test_voice_management
+python3 -m unittest discover -s tests -p 'test_voice_management.py'
 sudo systemctl restart jarvis-drive@shadowfax.service
 sudo systemctl restart jarvis-nav2.service
 sudo systemctl restart jarvis-agents-voice.service
