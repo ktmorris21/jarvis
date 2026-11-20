@@ -211,7 +211,7 @@ sudo EDITOR=vim visudo -f /etc/sudoers.d/jarvis-voice-update
 Insert precisely these rules (adapt paths/user only after checking them):
 
 ```text
-shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl start jarvis-voice-update.service
+shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start jarvis-voice-update.service
 shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl restart jarvis-bridge@shadowfax.service
 shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl restart jarvis-agents-voice.service
 ```
