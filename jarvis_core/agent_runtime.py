@@ -34,6 +34,7 @@ AGENT_TOOL_NAMES = frozenset({
     "set_lidar_service",
     "reboot_pi",
     "explore",
+    "move_relative",
     "stop_exploring",
     "exploration_status",
     "inspect_environment",
@@ -197,6 +198,33 @@ async def exploration_command_data(ability: str) -> dict:
                     "reason": event.get("error") or "Exploration command failed"}
         return {"available": True, "success": bool(result.get("success")),
                 "message": str(result.get("message", ""))}
+    finally:
+        _pending_status.pop(command.command_id, None)
+
+
+async def relative_motion_command_data(data: dict) -> dict:
+    """Return the local Nav2 acceptance or safety rejection, never assume completion."""
+    from .executive import send_command
+    from .models import Command
+
+    command = Command(target="picar-ros", ability="move_relative", data=data)
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    _pending_status[command.command_id] = future
+    try:
+        sent, route = await send_command(command)
+        if not sent:
+            return {"available": False, "success": False, "reason": route}
+        try:
+            event = await asyncio.wait_for(future, timeout=12.0)
+        except asyncio.TimeoutError:
+            return {"available": False, "success": False,
+                    "reason": "Relative motion request timed out; do not assume movement"}
+        result = event.get("result")
+        if not isinstance(result, dict) or event.get("status") != "complete":
+            return {"available": True, "success": False,
+                    "reason": event.get("error") or "ROS rejected relative movement"}
+        return {"available": True, **result}
     finally:
         _pending_status.pop(command.command_id, None)
 
