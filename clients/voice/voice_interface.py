@@ -21,6 +21,7 @@ import websockets
 from openwakeword.model import Model
 from local_commands import LocalCommands
 from local_audio import play_local_response
+from diagnostics import collect_diagnostics
 from environment_camera import capture_environment
 from boot_notice import BOOT_GREETING, needs_boot_announcement, mark_boot_announced
 
@@ -503,6 +504,7 @@ async def core_socket_worker(args, head, response_finished, connection_state):
                 if hello.get("type") != "hello_ack":
                     raise RuntimeError(f"Unexpected Core hello: {hello!r}")
                 connection_state["ready"] = True
+                connection_state["ws"] = ws
                 print("[VOICE] Core connected", flush=True)
                 await receive_commands(ws, response_finished, head)
         except asyncio.CancelledError:
@@ -511,6 +513,7 @@ async def core_socket_worker(args, head, response_finished, connection_state):
             print(f"[VOICE] Core unavailable: {exc!r}", flush=True)
         finally:
             connection_state["ready"] = False
+            connection_state["ws"] = None
             response_finished.played = False
             response_finished.set()
         await asyncio.sleep(3)
@@ -549,6 +552,22 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
         try:
             handled, reply, power_action = await local.act(wav)
             if handled:
+                if power_action == "diagnostics":
+                    try:
+                        ws = connection_state.get("ws") if connection_state["ready"] else None
+                        if ws is None:
+                            raise RuntimeError("Core offline")
+                        report = await collect_diagnostics()
+                        await ws.send(json.dumps({
+                            "type": "event", "event": "PI_DIAGNOSTIC_UPLOAD",
+                            "timestamp": timestamp(), "data": report,
+                        }))
+                        reply = "Diagnostics uploaded. Report " + report["report_id"] + "."
+                        print("[PI DIAG] Sent report " + report["report_id"], flush=True)
+                    except Exception as exc:
+                        print("[PI DIAG] Upload failed:", repr(exc), flush=True)
+                        reply = "Diagnostic upload failed. Check the local voice logs."
+                    power_action = None
                 print("[LOCAL]", reply, flush=True)
                 await head.set("speaking")
                 playback_ok = False
@@ -564,11 +583,12 @@ async def conversation_loop(model, head, args, response_finished, connection_sta
                 if power_action:
                     followup = False
                     try:
-                        await local.system_action(power_action)
+                        if playback_ok:
+                            await local.system_action(power_action)
                     except Exception as exc:
                         print("[LOCAL] System action failed:", repr(exc), flush=True)
                         try:
-                            await play_local_response("Power command failed.", device=DEVICE, fallback=play_piper)
+                            await play_local_response("Local command failed.", device=DEVICE, fallback=play_piper)
                         except Exception:
                             pass
                 elif reply:
