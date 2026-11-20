@@ -38,11 +38,16 @@ COMMANDS = {
     "power down jarvis": "poweroff",
     "shut down": "poweroff",
     "shut down jarvis": "poweroff",
+    "upload diagnostics": "diagnostics",
+    "send diagnostics": "diagnostics",
+    "update jarvis": "update",
+    "pull latest code": "update",
 }
 PROMPTS = {
     "arm": ("Say confirm arm motors.", "confirm arm motors"),
     "reboot": ("Say confirm reboot.", "confirm reboot"),
     "poweroff": ("Say confirm power down.", "confirm power down"),
+    "update": ("Say confirm update Jarvis.", "confirm update jarvis"),
 }
 # Disarm is intentionally a single utterance for rapid operator control.
 
@@ -182,6 +187,10 @@ class LocalCommands:
         if action in ("arm", "disarm"):
             await self._ros_armed(action == "arm")
             return "Motors armed." if action == "arm" else "Motors disarmed."
+        if action == "diagnostics":
+            return "Uploading diagnostics."
+        if action == "update":
+            return "Starting update. Voice may disconnect."
         if action in ("reboot", "poweroff"):
             # Arrange the operation after the acknowledgement is played.
             return "Rebooting Jarvis." if action == "reboot" else "Powering down Jarvis."
@@ -206,7 +215,7 @@ class LocalCommands:
             action = self.pending
             self.pending = None
             if normalized == PROMPTS[action][1]:
-                if action in ("reboot", "poweroff"):
+                if action in ("reboot", "poweroff", "update"):
                     return True, await self._execute(action), action
                 try:
                     return True, await self._execute(action), None
@@ -217,6 +226,8 @@ class LocalCommands:
         action = COMMANDS.get(normalized)
         if action is None:
             return False, None, None
+        if action == "diagnostics":
+            return True, await self._execute(action), "diagnostics"
         if action == "disarm":
             try:
                 return True, await self._execute(action), None
@@ -230,6 +241,19 @@ class LocalCommands:
         return True, await self._execute(action), None
 
     async def system_action(self, action):
+        if action == "update":
+            # A detached updater survives the voice service being restarted.
+            script = Path(__file__).resolve().parents[2] / "ops" / "voice_update.sh"
+            if not script.is_file():
+                raise FileNotFoundError("Updater script missing")
+            log_path = Path.home() / "jarvis-update.log"
+            with log_path.open("ab") as log:
+                subprocess.Popen(
+                    ["/bin/bash", str(script)], stdin=subprocess.DEVNULL,
+                    stdout=log, stderr=subprocess.STDOUT,
+                    start_new_session=True, cwd=str(script.parents[1]),
+                )
+            return
         if action not in ("reboot", "poweroff"):
             raise ValueError("Invalid power action")
         # Never use a shell or accept untrusted arguments.
