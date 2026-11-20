@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis explicit voice-confirmed Git update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=shadowfax
+Group=shadowfax
+WorkingDirectory=/home/shadowfax/jarvis
+Environment=HOME=/home/shadowfax
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /home/shadowfax/jarvis/ops/voice_update.sh
+TimeoutStartSec=180
+RemainAfterExit=no
