@@ -7,7 +7,7 @@ import asyncio
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 SERVICES = (
@@ -22,6 +22,19 @@ MAX_REPORT = 14500
 # Match the message text rather than relying on systemd's severity field.
 # Include navigation failures sent by the bridge at INFO severity.
 JOURNAL_WINDOW = "-30 minutes"
+MAX_GOAL_CONTEXTS = 2
+GOAL_FAILURE_MATCH = r"nav_goal_aborted|RELATIVE_MOTION_ABORT|exploration_goal_failed"
+# Capture relevant ROS2 planner/controller/BT errors around a failed goal.
+NAV2_CONTEXT_MATCH = (
+    r"\[(?:WARN|WARNING|ERROR|FATAL)\]"
+    r"|failed to plan|no valid path|exceeded maximum iterations"
+    r"|navigate_to_pose|follow_path|compute_path_to_pose"
+    r"|bt_navigator|controller_server|planner_server"
+    r"|ActionServer|Goal failed|goal was aborted"
+)
+EVENT_LINE_TIME = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s"
+)
 JOURNAL_MATCH = (
     r"\[(?:WARN|WARNING|ERROR|FATAL)\]"
     r"|\b(?:warn(?:ing)?|error|fatal|critical|exception|traceback)\b"
@@ -52,6 +65,52 @@ def run(argv, timeout=5):
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f"unavailable: {type(exc).__name__}"
 
+def recent_goal_events():
+    """Find recent timestamped goal failures in Pi-side journals."""
+    output = run([
+        "/usr/bin/journalctl",
+        "-u", "jarvis-bridge@shadowfax.service",
+        "-u", "jarvis-nav2.service",
+        "--since", JOURNAL_WINDOW,
+        "--grep", GOAL_FAILURE_MATCH, "--case-sensitive=no",
+        "-n", "12", "--no-pager", "-o", "short-iso",
+    ], timeout=6)
+    events = []
+    seen = set()
+    for line in output.splitlines():
+        match = EVENT_LINE_TIME.match(line)
+        if match is None:
+            continue
+        try:
+            when = datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        goal_id = re.search(r'goal_id[^0-9a-f]*([0-9a-f]{32})', line)
+        identity = goal_id.group(1) if goal_id else when.isoformat()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        events.append((when, line))
+        if len(events) >= MAX_GOAL_CONTEXTS:
+            break
+    return events
+
+
+def goal_failure_context(when, event):
+    """Query Nav2 messages within a narrow window around one failed goal."""
+    before = (when - timedelta(seconds=6)).isoformat(timespec="seconds")
+    after = (when + timedelta(seconds=3)).isoformat(timespec="seconds")
+    details = run([
+        "/usr/bin/journalctl", "-u", "jarvis-nav2.service",
+        "--since", before, "--until", after,
+        "--grep", NAV2_CONTEXT_MATCH, "--case-sensitive=no",
+        "-n", "50", "--no-pager", "-o", "short-iso",
+    ], timeout=6)
+    # Keep the event marker and newest nearby Nav2 errors, even if verbose.
+    return clean("GOAL FAILURE " + event[:420] + "\n" + details,
+                 newest_first=True)
+
+
 def collect_sync():
     report_id = uuid4().hex[:12]
     sections = {
@@ -78,6 +137,10 @@ def collect_sync():
         "--case-sensitive=no",
         "-n", "30", "--no-pager", "-o", "short-iso",
     ], timeout=6)
+    # Correlate up to two recent failed goals to nearby Nav2 diagnostic lines.
+    # No daemon or continuous log capture is needed.
+    for index, (when, event) in enumerate(recent_goal_events(), 1):
+        sections["nav_failure_context:" + str(index)] = goal_failure_context(when, event)
     report = {
         "report_id": report_id,
         "collected_at": datetime.now(timezone.utc).isoformat(),
