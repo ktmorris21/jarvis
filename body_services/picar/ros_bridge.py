@@ -26,6 +26,7 @@ from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, Du
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
+from .relative_motion import RelativeMotion
 from tf2_ros import Buffer, TransformListener
 import websockets
 
@@ -93,6 +94,7 @@ class RosStatusNode(Node):
                 "exploration_status": "/jarvis/exploration/status",
             }.items()
         }
+        self.relative_motion = RelativeMotion(self)
 
     def _scan_callback(self, msg):
         with self._lock:
@@ -319,7 +321,7 @@ async def bridge_loop(args, node):
                 await ws.send(json.dumps({
                     "type": "hello", "interface_id": args.interface_id,
                     "interface_type": "ros_status",
-                    "capabilities": ["get_robot_status", "explore", "stop_exploring", "exploration_status"],
+                    "capabilities": ["get_robot_status", "explore", "stop_exploring", "exploration_status", "move_relative"],
                 }))
                 reply = json.loads(await ws.recv())
                 if reply.get("type") != "hello_ack":
@@ -347,7 +349,11 @@ async def receive_core_commands(ws, args, node):
         if command.get("type") != "command":
             continue
         ability = command.get("ability")
-        if command.get("data") not in (None, {}):
+        if ability == "move_relative":
+            result = await node.relative_motion.move(command.get("data"))
+            status = "complete" if result.get("success") else "failed"
+            error = None if result.get("success") else result.get("message")
+        elif command.get("data") not in (None, {}):
             result, status, error = None, "failed", "exploration/status commands take no arguments"
         elif ability == "get_robot_status":
             try:
