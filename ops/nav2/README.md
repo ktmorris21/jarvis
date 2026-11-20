@@ -1,5 +1,31 @@
 # Jarvis point-to-point navigation sprint (ROS 2 Jazzy)
 
+## Coordinate-goal checker selection fix (November 2026)
+
+When `relative_goal_checker` was added alongside the existing `goal_checker`,
+ordinary NavigateToPose goals began aborting immediately. The ROS journal
+reported: `FollowPath called with goal_checker name  ... which does not exist`;
+available names were `goal_checker` and `relative_goal_checker`.
+The regular `point_to_point.xml` behavior tree must explicitly supply
+`goal_checker_id="goal_checker"` to its FollowPath action. Relative
+voice movement already specifies `relative_goal_checker` on its separate
+FollowPath goal. No tolerance values or motor-arming logic change.
+
+Park and disarm before applying this Nav2 configuration change:
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+sudo systemctl restart jarvis-nav2.service
+```
+
+Then inspect `journalctl -u jarvis-nav2.service -n 80 --no-pager` for
+startup errors. Test a safe RViz coordinate goal with motors disarmed first
+and verify that `Failed to find goal checker name` no longer occurs.
+An armed short drive should only follow after normal supervised checks.
+
+
 This first configuration runs Nav2 alongside the **existing** mapping service.
 It does **not** start AMCL, another SLAM instance, a map_server, or a separate
 velocity-smoothing topic. Nav2's controller publishes directly to `/cmd_vel`,
