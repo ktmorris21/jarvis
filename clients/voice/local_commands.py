@@ -86,6 +86,8 @@ CLOSING_PHRASES = (
     "good night jarvis",
     "stop listening",
     "end conversation",
+    "never mind",
+    "nevermind",
 )
 # Vosk grammar entries need plain spoken words, not apostrophe-normalized
 # tokens. Add explicit expanded equivalents for contracted phrases.
