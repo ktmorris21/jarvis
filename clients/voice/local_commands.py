@@ -242,17 +242,11 @@ class LocalCommands:
 
     async def system_action(self, action):
         if action == "update":
-            # A detached updater survives the voice service being restarted.
-            script = Path(__file__).resolve().parents[2] / "ops" / "voice_update.sh"
-            if not script.is_file():
-                raise FileNotFoundError("Updater script missing")
-            log_path = Path.home() / "jarvis-update.log"
-            with log_path.open("ab") as log:
-                subprocess.Popen(
-                    ["/bin/bash", str(script)], stdin=subprocess.DEVNULL,
-                    stdout=log, stderr=subprocess.STDOUT,
-                    start_new_session=True, cwd=str(script.parents[1]),
-                )
+            # systemd owns the updater independently of this voice process.
+            await self._run([
+                "/usr/bin/sudo", "-n", "/usr/bin/systemctl",
+                "start", "jarvis-voice-update.service",
+            ], timeout=8)
             return
         if action not in ("reboot", "poweroff"):
             raise ValueError("Invalid power action")
