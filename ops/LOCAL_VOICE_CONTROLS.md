@@ -238,6 +238,41 @@ best-effort redaction; restrict Railway log access. The upload requires an
 active Core WebSocket; without it Jarvis says the upload failed. This is
 intended for supervised, occasional troubleshooting, not continuous telemetry.
 
+### Navigation-failure context (new)
+
+Diagnostics now find up to **two recent failed navigation goals** in the last
+30 minutes, including `nav_goal_aborted` and `RELATIVE_MOTION_ABORT` events.
+Each failure gets its own `nav_failure_context:1` / `:2` section, containing
+the goal event and selected Nav2 planner, controller, action, and
+behavior-tree log messages from **six seconds before to three seconds after**
+the failure. This is a timestamp-based correlation, not proof that every
+nearby planner warning belongs to the same goal. Repeated frontier previews
+may run in the same interval, so interpret their warnings carefully.
+
+The capture runs **only when "upload diagnostics" is requested**; it adds no
+persistent recorder, extra ROS process, or autonomous retry. Each section is
+bounded to 2,200 characters, and the overall report is bounded as before.
+If the goal event has aged out of the 30-minute window or its journal has
+rotated, the surrounding context cannot be recovered.
+
+**Pi-only deployment** (no Railway, Nav2, or drive changes):
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m unittest discover -s tests -p 'test_diagnostics.py'
+python3 -m py_compile clients/voice/diagnostics.py
+sudo systemctl restart jarvis-agents-voice.service
+```
+
+For a diagnostic test, with the robot disarmed, attempt a regular **plan-only**
+or supervised coordinate goal as appropriate. After an observed abort, say
+"Hey Jarvis", wait for "I'm here", then "Upload diagnostics". The Railway
+report should contain `nav_failure_context:1` along with the usual
+`journal:nav_goal_failures` section. No need to induce an actual physical
+collision for diagnosis.
+
 ### Warning-focused diagnostic history
 
 The diagnostics upload now searches the preceding **30 minutes** of each
