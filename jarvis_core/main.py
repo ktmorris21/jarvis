@@ -22,6 +22,7 @@ async def lifespan(app:FastAPI):
 
 app=FastAPI(title="Jarvis Core v1 Cognitive Context",lifespan=lifespan)
 nav_diagnostic_log = logging.getLogger("jarvis.navigation.diagnostics")
+pi_diagnostic_log = logging.getLogger("jarvis.pi.diagnostics")
 @app.get("/health")
 async def health(): return {"status":"ok","service":"jarvis-core","phase":"v1-cognitive-context"}
 @app.get("/state")
@@ -255,6 +256,33 @@ async def ws_endpoint(ws:WebSocket,token:str=Query(default="")):
             payload=await ws.receive_json()
             try: event=InterfaceEvent.model_validate(payload)
             except ValidationError as e: await ws.send_json({"type":"error","detail":str(e)}); continue
+            if event.event == "PI_DIAGNOSTIC_UPLOAD":
+                # Only a connected, authenticated voice interface may send an
+                # operator-requested snapshot. No DB, memory or agent ingestion.
+                connection = state.interfaces.get(iid)
+                data = event.data
+                if (iid != "picar-voice" or connection is None
+                        or connection.interface_type != "mobile_body"
+                        or not isinstance(data, dict)
+                        or not isinstance(data.get("report_id"), str)
+                        or not __import__("re").fullmatch(r"[0-9a-f]{12}", data["report_id"])
+                        or not isinstance(data.get("sections"), dict)
+                        or len(data["sections"]) > 24
+                        or len(json.dumps(data)) > 16000):
+                    pi_diagnostic_log.warning("[PI DIAG REJECTED] source=%s", iid)
+                    continue
+                report_id = data["report_id"]
+                pi_diagnostic_log.warning("[PI DIAG] START id=%s received=%s",
+                    report_id, datetime.now(timezone.utc).isoformat())
+                for name, value in data["sections"].items():
+                    if (not isinstance(name, str) or len(name) > 100
+                            or not isinstance(value, str) or len(value) > 2500):
+                        pi_diagnostic_log.warning("[PI DIAG] INVALID SECTION id=%s", report_id)
+                        break
+                    pi_diagnostic_log.warning("[PI DIAG] id=%s section=%s data=%s",
+                        report_id, name, json.dumps(value))
+                pi_diagnostic_log.warning("[PI DIAG] END id=%s", report_id)
+                continue
             if event.event == "NAV_DIAGNOSTIC":
                 # Operational telemetry belongs in Railway logs, not Core memory or
                 # the agent's conversational context. Accept only the ROS bridge.
