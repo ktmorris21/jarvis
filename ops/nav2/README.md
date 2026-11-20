@@ -353,3 +353,61 @@ status questions. When the exploration service is unavailable, the
 robot-status snapshot still succeeds. This is a Pi bridge-only change,
 so after pulling restart `jarvis-bridge@shadowfax.service`. No Railway
 code change is required for this particular snapshot enrichment.
+
+
+## Conversational relative movement (experimental; supervised)
+
+The Agents SDK now exposes `move_relative(direction, distance_m)` for explicit
+natural-language distance commands (e.g., "move forward one foot", "back up six
+inches"). Core converts units; the Pi ROS bridge validates the request and
+uses **Nav2 FollowPath with a fixed straight-line path**, not a free-ranging
+NavigateToPose detour. A separate `relative_goal_checker` uses 4.5 cm XY
+tolerance; the ordinary Nav2 navigation goal checker is unchanged.
+
+The Pi enforces 0.08–0.9144 m per command, fresh map-frame localization,
+RF2O odometry, two LiDAR streams, a current global Nav2 costmap, known-free
+inflated-footprint corridor, idle exploration, no active NavigateToPose goal,
+and a positive read-only **armed hardware** status from the drive controller.
+It never arms motors or directly publishes motor commands. Additional local
+watchdog checks monitor health, lateral deviation, travel time, measured
+progress and the remaining corridor, requesting internal Nav2 cancellation
+on failure. A command is only *accepted*, not completed, when Core responds.
+
+**Limitations:** No independent safety-rated collision monitor or hard E-stop;
+rear low-obstacle visibility is incomplete; no wheel encoders; and Nav2/SLAM
+odometry can drift. The global costmap cannot detect objects outside sensor
+coverage. Cancellation is not an instantaneous physical motor cutoff.
+This is experimental and **must be tested with wheels elevated and then
+supervised in clear floor space**. Keep the existing physical cutoff at hand.
+No user-facing stop-motion voice tool is included in this change.
+
+### Deployment sequence
+
+1. Check both Core deployment and Pi working-tree status before updating. If
+   Core deploys before the bridge, the tool will fail closed because the old
+   bridge does not advertise `move_relative`.
+2. With motors **disarmed**, pull this commit onto the Pi and compile:
+
+   ```bash
+   cd ~/jarvis
+   git status --short
+   git pull --ff-only
+   python3 -m py_compile body_services/picar/relative_motion.py body_services/picar/ros_bridge.py body_services/picar/ros_drive_controller.py
+   ```
+3. Restart in order (restarting the drive always **disarms**):
+
+   ```bash
+   sudo systemctl restart jarvis-drive@shadowfax.service
+   sudo systemctl restart jarvis-nav2.service
+   sudo systemctl restart jarvis-bridge@shadowfax.service
+   ```
+4. Verify `/jarvis_drive/status` using `ros2 service call /jarvis_drive/status std_srvs/srv/Trigger '{}'`, verify Nav2 lifecycle nodes and `/follow_path`, and check `/global_costmap/costmap` is publishing. Check that the drive status says `armed: false`.
+5. First issue a movement command while **disarmed**; it must explicitly reject
+   the request. Next perform a short wheels-elevated test with motor hardware
+   enabled and operator-controlled arming, then a supervised floor test in an
+   unobstructed mapped area. Confirm distance by measurement; 4.5 cm is a
+   controller completion tolerance, not a promise of physical precision.
+
+Diagnostic tags: `RELATIVE_MOTION_ACCEPTED`, `RELATIVE_MOTION_FINISHED`,
+`RELATIVE_MOTION_ABORT`, `RELATIVE_MOTION_CANCEL_FAILED` in the bridge journal.
+The movement's `motion_id` is diagnostic-only for this increment.
