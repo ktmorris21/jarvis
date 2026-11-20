@@ -14,6 +14,8 @@ WebSocket is disconnected. No model/Agent can issue these local actions.
 | "Hey Jarvis, disarm motors" | disarms immediately | none |
 | "Hey Jarvis, reboot" | "Say confirm reboot" | "Hey Jarvis, confirm reboot" |
 | "Hey Jarvis, power down" | "Say confirm power down" | "Hey Jarvis, confirm power down" |
+| "Hey Jarvis, upload diagnostics" | Uploads a bounded snapshot to Railway logs | none |
+| "Hey Jarvis, update Jarvis" | "Say confirm update Jarvis" | "Hey Jarvis, confirm update Jarvis" |
 
 Confirmation expires after **20 seconds**; each separate utterance requires the
 wake word. Reboot and power down run after the local Piper spoken acknowledgement.
@@ -154,3 +156,85 @@ issued unless acknowledgement audio playback succeeds.
 Piper generation is deliberately an explicit setup operation instead of a
 boot-time activity, so service startup stays predictable and there is no
 per-utterance synthesis cost on cache hits.
+
+## Operator-triggered diagnostic upload (new)
+
+"Hey Jarvis, upload diagnostics" runs **locally** using the existing offline
+Vosk path, with no Agents SDK tool invocation. The voice WebSocket sends one
+`PI_DIAGNOSTIC_UPLOAD` event to Core. Railway logs receive `[PI DIAG] START`,
+section lines, and `[PI DIAG] END`, all sharing a 12-character report ID.
+The report contains a short Git revision, uptime, memory and disk use, and
+the recent journal/status of Nav2, mapping, drive and ROS bridge. The voice
+client deliberately excludes voice logs, environment variables and arbitrary
+files. Diagnostics are not saved into Jarvis memory or its conversational
+context. The spoken reply confirms that the client sent the report; it
+does **not** prove Railway has persisted the lines. Check Railway logs by
+`[PI DIAG]` and report ID.
+
+**Important:** Journal content can contain sensitive information even with
+best-effort redaction; restrict Railway log access. The upload requires an
+active Core WebSocket; without it Jarvis says the upload failed. This is
+intended for supervised, occasional troubleshooting, not continuous telemetry.
+
+## Operator-confirmed update (new)
+
+"Hey Jarvis, update Jarvis" prompts "Say confirm update Jarvis." A second
+utterance within 20 seconds launches a fixed, separate systemd oneshot unit.
+It refuses to update if the repository is dirty, not on `main`, or
+diverged from `origin/main`. It runs `git fetch origin main` and a
+fast-forward-only merge, then restarts ONLY
+`jarvis-bridge@shadowfax.service` and `jarvis-agents-voice.service`.
+This intentionally does **not** restart Nav2, mapping, or drive; those
+changes still require supervised manual rollout. The spoken "Starting update"
+is an acknowledgement of the requested job, **not** proof of success.
+Review `journalctl -u jarvis-voice-update.service` or
+`~/jarvis-update.log` if using an earlier helper.
+
+Voice commands are not authentication and may be replayed by nearby speakers.
+Keep the robot parked, motors disarmed, and physical cutoff available before
+using the update command. Do not enable these commands in a shared or
+untrusted acoustic environment.
+
+### One-time Pi setup
+
+After Railway has deployed the new Core receiver, on the Pi (while parked):
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+sudo install -m 0644 ops/systemd/jarvis-voice-update.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo EDITOR=vim visudo -f /etc/sudoers.d/jarvis-voice-update
+```
+
+Insert precisely these rules (adapt paths/user only after checking them):
+
+```text
+shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl start jarvis-voice-update.service
+shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl restart jarvis-bridge@shadowfax.service
+shadowfax ALL=(root) NOPASSWD: /usr/bin/systemctl restart jarvis-agents-voice.service
+```
+
+Then validate syntax and permissions and regenerate cached phrases before
+restarting the voice service:
+
+```bash
+sudo visudo -c
+sudo -n -l -U shadowfax
+python3 -m py_compile clients/voice/local_commands.py clients/voice/diagnostics.py clients/voice/voice_interface.py
+.venv-voice/bin/python clients/voice/local_audio.py generate
+sudo systemctl restart jarvis-agents-voice.service
+```
+
+For the initial test, first say "upload diagnostics" and check Railway for
+the report ID. Then check `git status --short`, keep Jarvis stationary,
+speak "update Jarvis", and intentionally do **not** confirm on the first
+attempt. After the confirmation expires, perform the full command while
+observing `journalctl -fu jarvis-voice-update.service`. An already-current
+repository reports "Already up to date" without restarting any services.
+
+**Limitations:** The updater does not install Python dependencies, apply
+systemd unit changes, modify ROS configuration or automatically roll back.
+A failed Git pull leaves the running stack alone; a failure during service
+restart requires manual attention. This is a narrowly bounded first sprint.
