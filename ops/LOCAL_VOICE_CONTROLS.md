@@ -238,6 +238,38 @@ best-effort redaction; restrict Railway log access. The upload requires an
 active Core WebSocket; without it Jarvis says the upload failed. This is
 intended for supervised, occasional troubleshooting, not continuous telemetry.
 
+### Warning-focused diagnostic history
+
+The diagnostics upload now searches the preceding **30 minutes** of each
+service's journal, matching ROS `[WARN]`/`[ERROR]` text, warnings, failures,
+exceptions, and navigation/controller issues rather than copying just the
+last 18 messages. This is important because ROS log messages often have an
+informational journald priority even when their text indicates an error.
+
+A separate `journal:nav_goal_failures` section searches bridge events
+including `nav_goal_aborted`, `nav_goal_canceled`, relative-motion aborts,
+and unsuccessful stop cancellation. It prevents frequent LiDAR/TF warnings
+from evicting the goal failures being investigated. The existing total report
+and individual section bounds, redaction, and Railway-only (no memory)
+handling are unchanged. Matches are bounded to the most recent entries;
+very large warning bursts can still cause older events to be omitted.
+
+**Pi-only deployment** (Core does not need changes):
+
+```bash
+cd ~/jarvis
+git status --short
+git pull --ff-only
+python3 -m unittest discover -s tests -p 'test_diagnostics.py'
+python3 -m py_compile clients/voice/diagnostics.py
+sudo systemctl restart jarvis-agents-voice.service
+```
+
+After restart, say "Hey Jarvis", wait for "I'm here", then "Upload
+diagnostics". Search Railway logs for the report ID and
+`journal:nav_goal_failures`. The voice-service restart does not change
+motor arming or restart Nav2.
+
 ## Operator-confirmed update (new)
 
 "Hey Jarvis, update Jarvis" prompts "Say confirm update Jarvis." A second
