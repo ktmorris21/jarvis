@@ -29,6 +29,9 @@ LOCAL_REPLIES = frozenset({
     "Rebooting Jarvis.",
     "Powering down Jarvis.",
     "Power command failed.",
+    "Starting update. Voice may disconnect.",
+    "Local command failed.",
+    "Diagnostic upload failed. Check the local voice logs.",
 })
 
 
