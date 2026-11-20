@@ -350,7 +350,15 @@ async def receive_core_commands(ws, args, node):
             continue
         ability = command.get("ability")
         if ability == "move_relative":
-            result = await node.relative_motion.move(command.get("data"))
+            # A delayed/replayed physical motion instruction must not execute.
+            try:
+                timestamp = datetime.fromisoformat(str(command["timestamp"]).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                fresh = timestamp.tzinfo is not None and -2 <= age <= 30
+            except (KeyError, ValueError, TypeError):
+                fresh = False
+            result = (await node.relative_motion.move(command.get("data")) if fresh else
+                      {"success": False, "message": "Relative motion command expired or lacks timestamp"})
             status = "complete" if result.get("success") else "failed"
             error = None if result.get("success") else result.get("message")
         elif command.get("data") not in (None, {}):
