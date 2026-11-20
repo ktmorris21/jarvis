@@ -46,7 +46,7 @@ def yaw_of(q):
 
 def footprint_corridor_clear(grid, x, y, yaw, signed_distance):
     """Require known-free cells under every part of the swept rectangular body."""
-    if grid is None or grid.info.resolution <= 0 or not grid.data:
+    if grid is None or grid.header.frame_id != "map" or grid.info.resolution <= 0 or not grid.data:
         return False, "Costmap unavailable"
     res = float(grid.info.resolution)
     width, height = grid.info.width, grid.info.height
@@ -233,7 +233,8 @@ class RelativeMotion:
                 progress = (dx*math.cos(state["yaw"]) + dy*math.sin(state["yaw"]))
                 lateral = abs(-dx*math.sin(state["yaw"]) + dy*math.cos(state["yaw"]))
                 signed_progress = progress if state["distance"] > 0 else -progress
-                if lateral > 0.11 or signed_progress > abs(state["distance"])+0.12:
+                heading_error = abs(math.atan2(math.sin(heading-state["yaw"]), math.cos(heading-state["yaw"])))
+                if lateral > 0.11 or heading_error > 0.30 or signed_progress > abs(state["distance"])+0.12:
                     healthy, reason = False, "Deviation from straight path"
                 elif signed_progress > state["best_progress"]+0.025:
                     state["best_progress"] = signed_progress
