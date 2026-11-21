@@ -1,19 +1,27 @@
 <?xml version="1.0"?>
-<!-- Minimal Nav2 goal execution: plan, follow, replan, no spin/backup recoveries.
-     Jarvis cannot rotate in place. Fail and stop instead of attempting generic
-     differential-drive recovery behaviors. -->
+<!-- Ackermann-safe, bounded recovery: never spin in place.
+     A failed plan or controller path may trigger a short straight reverse,
+     checked against the local costmap by Nav2's backup behavior server.
+     If backup is unsafe or unavailable, fail and stop rather than bypassing
+     collision checking. The original {goal} remains unchanged on retry. -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <PipelineSequence name="NavigateWithReplanning">
-      <RateController hz="1.0">
-        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
-                           error_code_id="{compute_path_error_code}"/>
-      </RateController>
-      <!-- Specify the original checker explicitly: Nav2 cannot infer which
-           checker to use once relative_goal_checker is also configured. -->
-      <FollowPath path="{path}" controller_id="FollowPath"
-                  goal_checker_id="goal_checker"
-                  error_code_id="{follow_path_error_code}"/>
-    </PipelineSequence>
+    <RecoveryNode number_of_retries="2" name="NavigateWithBoundedReverseRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"
+                             error_code_id="{compute_path_error_code}"/>
+        </RateController>
+        <!-- Both goal checkers are configured: select the normal one. -->
+        <FollowPath path="{path}" controller_id="FollowPath"
+                    goal_checker_id="goal_checker"
+                    error_code_id="{follow_path_error_code}"/>
+      </PipelineSequence>
+      <!-- Nav2 BackUp performs footprint collision projection as it moves.
+           Positive backup_dist is required; speed is a request, not a
+           verified hardware speed on the PiCar-X. Never spin or drive blind. -->
+      <BackUp backup_dist="0.10" backup_speed="0.05" time_allowance="5.0"
+              server_name="backup" error_code_id="{backup_error_code}"/>
+    </RecoveryNode>
   </BehaviorTree>
 </root>
